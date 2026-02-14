@@ -78,15 +78,17 @@ async def callback(code: str):
 
         # Guardar tokens en memoria
         settings.ACCESS_TOKEN = response_data["access_token"]
-        settings.REFRESH_TOKEN = response_data["refresh_token"]
+        if "refresh_token" in response_data:
+            settings.REFRESH_TOKEN = response_data["refresh_token"]
         meli.token = response_data["access_token"]
 
         return {
             "status": "authenticated",
             "message": "Tokens obtenidos. Guárdalos en tus variables de entorno.",
             "access_token": response_data["access_token"],
-            "refresh_token": response_data["refresh_token"],
+            "refresh_token": response_data.get("refresh_token", "no incluido - necesitas scope offline_access"),
             "expires_in": response_data.get("expires_in"),
+            "full_response": response_data,
         }
 
     except Exception as e:
