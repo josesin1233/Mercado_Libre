@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from fastapi.responses import RedirectResponse
 from app.config import settings
 from app.meli_client import meli
@@ -33,8 +33,21 @@ async def callback(code: str):
                 "redirect_uri": settings.REDIRECT_URI,
             },
         )
-        r.raise_for_status()
-        tokens = r.json()
+
+    if r.status_code != 200:
+        return {
+            "status": "error",
+            "ml_status_code": r.status_code,
+            "ml_response": r.json(),
+            "debug": {
+                "app_id_set": bool(settings.APP_ID),
+                "secret_set": bool(settings.CLIENT_SECRET),
+                "redirect_uri": settings.REDIRECT_URI,
+                "code_received": code,
+            },
+        }
+
+    tokens = r.json()
 
     # Guardar tokens en memoria
     settings.ACCESS_TOKEN = tokens["access_token"]
