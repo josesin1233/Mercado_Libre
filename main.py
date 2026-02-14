@@ -1,14 +1,36 @@
-from fastapi import FastAPI
-from app.routes import orders, webhooks, notifications
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from app.routes import orders, webhooks, notifications, ventas
 from app.auth import router as auth_router
 from app.scheduler import lifespan
+from app.config import settings
 
 app = FastAPI(title="Mercado Libre - Gestión de Ventas", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def ip_whitelist(request: Request, call_next):
+    if not settings.ALLOWED_IPS:
+        return await call_next(request)
+
+    allowed = {ip.strip() for ip in settings.ALLOWED_IPS.split(",") if ip.strip()}
+    client_ip = request.client.host
+
+    # Revisar también X-Forwarded-For (Railway usa proxy)
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        client_ip = forwarded.split(",")[0].strip()
+
+    if client_ip not in allowed:
+        return JSONResponse(status_code=403, content={"detail": "IP no autorizada"})
+
+    return await call_next(request)
 
 app.include_router(auth_router, prefix="/auth", tags=["Auth"])
 app.include_router(orders.router, prefix="/orders", tags=["Órdenes"])
 app.include_router(webhooks.router, prefix="/webhooks", tags=["Webhooks"])
 app.include_router(notifications.router, prefix="/notifications", tags=["Notificaciones"])
+app.include_router(ventas.router, prefix="/ventas", tags=["Ventas"])
 
 
 @app.get("/")
