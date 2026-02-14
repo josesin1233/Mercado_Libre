@@ -6,6 +6,7 @@ import httpx
 import secrets
 import hashlib
 import base64
+import traceback
 
 router = APIRouter()
 
@@ -25,7 +26,6 @@ def generate_pkce():
 def login():
     """Redirige al usuario a Mercado Libre para autorizar la app."""
     code_verifier, code_challenge = generate_pkce()
-    # Guardar el verifier para usarlo en el callback
     _pkce_store["verifier"] = code_verifier
 
     auth_url = (
@@ -42,46 +42,57 @@ def login():
 @router.get("/callback")
 async def callback(code: str):
     """Recibe el código de autorización y lo intercambia por tokens."""
-    code_verifier = _pkce_store.get("verifier", "")
+    try:
+        code_verifier = _pkce_store.get("verifier", "")
 
-    async with httpx.AsyncClient() as client:
-        r = await client.post(
-            "https://api.mercadolibre.com/oauth/token",
-            data={
-                "grant_type": "authorization_code",
-                "client_id": settings.APP_ID,
-                "client_secret": settings.CLIENT_SECRET,
-                "code": code,
-                "redirect_uri": settings.REDIRECT_URI,
-                "code_verifier": code_verifier,
-            },
-        )
-
-    if r.status_code != 200:
-        return {
-            "status": "error",
-            "ml_status_code": r.status_code,
-            "ml_response": r.json(),
-            "debug": {
-                "app_id_set": bool(settings.APP_ID),
-                "secret_set": bool(settings.CLIENT_SECRET),
-                "redirect_uri": settings.REDIRECT_URI,
-                "code_received": code,
-                "verifier_set": bool(code_verifier),
-            },
+        payload = {
+            "grant_type": "authorization_code",
+            "client_id": settings.APP_ID,
+            "client_secret": settings.CLIENT_SECRET,
+            "code": code,
+            "redirect_uri": settings.REDIRECT_URI,
+            "code_verifier": code_verifier,
         }
 
-    tokens = r.json()
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                "https://api.mercadolibre.com/oauth/token",
+                data=payload,
+            )
 
-    # Guardar tokens en memoria
-    settings.ACCESS_TOKEN = tokens["access_token"]
-    settings.REFRESH_TOKEN = tokens["refresh_token"]
-    meli.token = tokens["access_token"]
+        response_data = r.json()
 
-    return {
-        "status": "authenticated",
-        "message": "Tokens obtenidos. Guárdalos en tus variables de entorno.",
-        "access_token": tokens["access_token"],
-        "refresh_token": tokens["refresh_token"],
-        "expires_in": tokens.get("expires_in"),
-    }
+        if r.status_code != 200:
+            return {
+                "status": "error",
+                "ml_status_code": r.status_code,
+                "ml_response": response_data,
+                "debug": {
+                    "app_id_set": bool(settings.APP_ID),
+                    "secret_set": bool(settings.CLIENT_SECRET),
+                    "redirect_uri": settings.REDIRECT_URI,
+                    "code_received": code,
+                    "verifier_set": bool(code_verifier),
+                },
+            }
+
+        # Guardar tokens en memoria
+        settings.ACCESS_TOKEN = response_data["access_token"]
+        settings.REFRESH_TOKEN = response_data["refresh_token"]
+        meli.token = response_data["access_token"]
+
+        return {
+            "status": "authenticated",
+            "message": "Tokens obtenidos. Guárdalos en tus variables de entorno.",
+            "access_token": response_data["access_token"],
+            "refresh_token": response_data["refresh_token"],
+            "expires_in": response_data.get("expires_in"),
+        }
+
+    except Exception as e:
+        return {
+            "status": "crash",
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "verifier_existed": "verifier" in _pkce_store,
+        }
