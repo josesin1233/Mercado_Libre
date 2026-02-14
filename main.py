@@ -1,6 +1,8 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from app.routes import orders, webhooks, notifications, ventas
+from app.routes.dashboard import router as dashboard_router
+from app.routes.notificaciones_page import router as notificaciones_page_router
 from app.auth import router as auth_router
 from app.scheduler import lifespan
 from app.config import settings
@@ -33,16 +35,13 @@ async def ip_whitelist(request: Request, call_next):
 
     return await call_next(request)
 
+app.include_router(dashboard_router, tags=["Dashboard"])
 app.include_router(auth_router, prefix="/auth", tags=["Auth"])
 app.include_router(orders.router, prefix="/orders", tags=["Órdenes"])
 app.include_router(webhooks.router, prefix="/webhooks", tags=["Webhooks"])
 app.include_router(notifications.router, prefix="/notifications", tags=["Notificaciones"])
 app.include_router(ventas.router, prefix="/ventas", tags=["Ventas"])
-
-
-@app.get("/")
-def root():
-    return {"status": "ok", "app": "Mercado Libre - Gestión de Ventas"}
+app.include_router(notificaciones_page_router, prefix="/notificaciones", tags=["Notificaciones Page"])
 
 
 @app.get("/health")
