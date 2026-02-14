@@ -8,8 +8,15 @@ from app.config import settings
 app = FastAPI(title="Mercado Libre - Gestión de Ventas", lifespan=lifespan)
 
 
+OPEN_PATHS = {"/", "/health", "/auth/login", "/auth/callback", "/webhooks/receive", "/webhooks/forward"}
+
+
 @app.middleware("http")
 async def ip_whitelist(request: Request, call_next):
+    # Dejar pasar rutas que necesitan acceso abierto (healthcheck, webhooks, auth)
+    if request.url.path in OPEN_PATHS:
+        return await call_next(request)
+
     if not settings.ALLOWED_IPS:
         return await call_next(request)
 
