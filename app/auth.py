@@ -7,6 +7,7 @@ import traceback
 import secrets
 import hashlib
 import base64
+from urllib.parse import urlencode
 
 router = APIRouter()
 
@@ -23,16 +24,16 @@ def login():
     """Redirige al usuario a Mercado Libre para autorizar la app."""
     code_verifier, code_challenge = _generate_pkce()
 
-    auth_url = (
-        f"https://auth.mercadolibre.com.mx/authorization"
-        f"?response_type=code"
-        f"&client_id={settings.APP_ID}"
-        f"&redirect_uri={settings.REDIRECT_URI}"
-        f"&scope=offline_access+read+write"
-        f"&code_challenge={code_challenge}"
-        f"&code_challenge_method=S256"
-        f"&state={code_verifier}"
-    )
+    params = urlencode({
+        "response_type": "code",
+        "client_id": settings.APP_ID,
+        "redirect_uri": settings.REDIRECT_URI,
+        "scope": "offline_access read write",
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+        "state": code_verifier,
+    })
+    auth_url = f"https://auth.mercadolibre.com.mx/authorization?{params}"
     return RedirectResponse(url=auth_url)
 
 
