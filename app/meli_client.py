@@ -38,16 +38,14 @@ class MeliClient:
         order = await self.get_order(order_id)
         return order.get("order_items", [])
 
-    async def get_recent_orders(self, order_status: str = "paid", shipping_status: str = None, limit: int = 50) -> dict:
-        """Busca órdenes del vendedor con filtros opcionales."""
+    async def get_recent_orders(self, order_status: str = "paid", limit: int = 100) -> dict:
+        """Busca órdenes del vendedor."""
         params = {
             "seller": settings.USER_ID,
             "order.status": order_status,
             "sort": "date_desc",
             "limit": limit,
         }
-        if shipping_status:
-            params["shipping.status"] = shipping_status
         async with httpx.AsyncClient() as client:
             r = await self._get(client, f"{self.BASE_URL}/orders/search", params=params)
             r.raise_for_status()
@@ -89,19 +87,9 @@ class MeliClient:
         return None
 
     async def get_pending_shipments(self) -> list[dict]:
-        """Obtiene TODAS las órdenes activas (ready_to_ship + pending) más las recientes."""
-        # Query específica por shipping status (atrapa órdenes antiguas pendientes)
-        ready_data = await self.get_recent_orders(shipping_status="ready_to_ship", limit=100)
-        pending_data = await self.get_recent_orders(shipping_status="pending", limit=50)
-        recent_data = await self.get_recent_orders(limit=50)
-
-        # Merge deduplicando por order_id
-        orders_map: dict = {}
-        for o in recent_data.get("results", []):
-            orders_map[o["id"]] = o
-        for o in ready_data.get("results", []) + pending_data.get("results", []):
-            orders_map[o["id"]] = o
-        orders = list(orders_map.values())
+        """Obtiene las 100 órdenes más recientes pagadas."""
+        data = await self.get_recent_orders(limit=100)
+        orders = data.get("results", [])
 
         enriched = []
         all_item_ids = []
