@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response, JSONResponse
 from datetime import datetime, timezone
 from app.meli_client import meli
 from app.ui import base_layout
@@ -29,15 +29,16 @@ def _get_deadline(shipment: dict | None) -> str | None:
     """Busca la fecha límite de despacho probando varias rutas del API de ML."""
     if not shipment:
         return None
-    # Ruta 1: shipping_option.estimated_handling_limit.date
-    d = (
-        shipment.get("shipping_option", {})
-        .get("estimated_handling_limit", {})
-        .get("date")
-    )
+    so = shipment.get("shipping_option") or {}
+    # Ruta 1: estimated_delivery_limit (última fecha para despachar a tiempo)
+    d = (so.get("estimated_delivery_limit") or {}).get("date")
     if d:
         return d
-    # Ruta 2: estimated_handling_limit directa
+    # Ruta 2: estimated_handling_limit dentro de shipping_option
+    d = (so.get("estimated_handling_limit") or {}).get("date")
+    if d:
+        return d
+    # Ruta 3: estimated_handling_limit directo
     ehl = shipment.get("estimated_handling_limit")
     if isinstance(ehl, dict):
         d = ehl.get("date")
@@ -45,8 +46,9 @@ def _get_deadline(shipment: dict | None) -> str | None:
             return d
     elif isinstance(ehl, str):
         return ehl
-    # Ruta 3: date_first_printed como referencia si no hay deadline
-    return None
+    # Ruta 4: estimated_delivery_final como último recurso
+    d = (so.get("estimated_delivery_final") or {}).get("date")
+    return d
 
 
 def _get_delivery_date(shipment: dict | None) -> str | None:
@@ -105,9 +107,9 @@ def _classify_status(shipment: dict | None, deadline_str: str | None) -> tuple[s
     if status == "cancelled":
         return "Cancelado", "badge-neutral", "other"
 
-    # ¿Está demorado? deadline pasado y no shipped
-    is_delayed = False
-    if deadline_str and status in ("ready_to_ship", "pending"):
+    # ¿Está demorado? Por substatus explícito o deadline pasado
+    is_delayed = substatus == "handling_time_over"
+    if not is_delayed and deadline_str and status in ("ready_to_ship", "pending"):
         deadline_dt = _parse_date(deadline_str)
         if deadline_dt and datetime.now(timezone.utc) > deadline_dt:
             is_delayed = True
@@ -180,6 +182,7 @@ def _enrich_order(item: dict) -> dict:
 
     return {
         "order_id": order.get("id", "?"),
+        "shipment_id": item.get("shipment_id"),
         "buyer": order.get("buyer", {}).get("nickname", "—"),
         "total": order.get("total_amount", 0),
         "currency": order.get("currency_id", "MXN"),
@@ -201,6 +204,7 @@ def _enrich_order(item: dict) -> dict:
                 "qty": oi.get("quantity", 1),
                 "sku": oi.get("item", {}).get("seller_sku", ""),
                 "unit_price": oi.get("unit_price", 0),
+                "thumbnail": oi.get("item", {}).get("thumbnail", ""),
             }
             for oi in order.get("order_items", [])
         ],
@@ -210,8 +214,9 @@ def _enrich_order(item: dict) -> dict:
 def _build_product_html(items: list[dict]) -> str:
     html = ""
     for p in items:
-        sku = f' <span class="sku">SKU: {p["sku"]}</span>' if p["sku"] else ""
-        html += f'<div class="product-line">{p["title"]} <strong>x{p["qty"]}</strong>{sku}</div>'
+        sku = f' <span class="sku">SKU: {p["sku"]}</span>' if p.get("sku") else ""
+        thumb = f'<img src="{p["thumbnail"]}" class="product-thumb" alt="">' if p.get("thumbnail") else '<div class="product-thumb-placeholder"></div>'
+        html += f'<div class="product-line">{thumb}<div><div>{p["title"]} <strong>x{p["qty"]}</strong>{sku}</div></div></div>'
     return html
 
 
@@ -256,9 +261,14 @@ def _build_order_card_html(o: dict) -> str:
     items_html = _build_product_html(o["items"])
     total_items = sum(i["qty"] for i in o["items"])
 
-    deadline_display = _format_date_short(o["deadline_str"]) if o["deadline_str"] else "Sin fecha asignada"
+    deadline_display = _format_date_short(o["deadline_str"]) if o["deadline_str"] else "Sin fecha"
+    delivery_display = _format_date_short(o["delivery_str"]) if o.get("delivery_str") else "—"
 
     pulse_class = " pulse" if is_delayed else ""
+
+    label_btn = ""
+    if o.get("shipment_id") and o.get("shipping_substatus_raw") in ("ready_to_print", "printed", "handling_time_over"):
+        label_btn = f'<a href="/ventas/etiqueta/{o["shipment_id"]}" target="_blank" class="btn btn-label">🖨️ Imprimir etiqueta</a>'
 
     return f"""
     <div class="pedido-card" style="border-left:4px solid {border_color};background:{bg};">
@@ -270,6 +280,7 @@ def _build_order_card_html(o: dict) -> str:
             <div class="pedido-badges">
                 <span class="badge {o["status_cls"]}{pulse_class}">{o["status_label"]}</span>
                 <span class="badge {o["tiempo_cls"]}">{o["tiempo_text"]}</span>
+                {label_btn}
             </div>
         </div>
 
@@ -284,20 +295,16 @@ def _build_order_card_html(o: dict) -> str:
                     <span class="meta-value">{_format_date_short(o["date_created"])}</span>
                 </div>
                 <div class="meta-item">
-                    <span class="meta-label">Enviar antes de</span>
-                    <span class="meta-value" style="{"color:var(--danger);font-weight:700;" if is_delayed else ""}">{deadline_display}</span>
+                    <span class="meta-label">Despachar antes de</span>
+                    <span class="meta-value" style="{"color:var(--danger);font-weight:700;" if is_delayed else "font-weight:600;"}">{deadline_display}</span>
                 </div>
                 <div class="meta-item">
-                    <span class="meta-label">Artículos</span>
-                    <span class="meta-value">{total_items}</span>
+                    <span class="meta-label">Entrega estimada</span>
+                    <span class="meta-value">{delivery_display}</span>
                 </div>
                 <div class="meta-item">
                     <span class="meta-label">Total</span>
                     <span class="meta-value"><strong>${o["total"]:,.2f} {o["currency"]}</strong></span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">Tipo envío</span>
-                    <span class="meta-value">{o["logistic"]}</span>
                 </div>
             </div>
         </div>
@@ -393,11 +400,44 @@ VENTAS_CSS = """
         font-size: 14px;
     }
     .product-line {
-        padding: 3px 0;
+        padding: 4px 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .product-thumb {
+        width: 48px;
+        height: 48px;
+        object-fit: contain;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: #fff;
+        flex-shrink: 0;
+    }
+    .product-thumb-placeholder {
+        width: 48px;
+        height: 48px;
+        border-radius: 6px;
+        border: 1px dashed var(--border);
+        flex-shrink: 0;
     }
     .product-line .sku {
         color: var(--text-muted);
         font-size: 11px;
+    }
+    .btn-label {
+        font-size: 12px;
+        padding: 4px 10px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        color: var(--text);
+        text-decoration: none;
+        white-space: nowrap;
+    }
+    .btn-label:hover {
+        background: var(--accent-soft);
+        border-color: var(--accent);
     }
 
     .pedido-meta {
@@ -571,6 +611,19 @@ async def ventas_debug():
             "_shipment_keys": list(shipment.keys()) if shipment else [],
         })
     return {"total": len(results), "orders": results}
+
+
+@router.get("/etiqueta/{shipment_id}")
+async def get_etiqueta(shipment_id: str):
+    """Descarga la etiqueta de envío en PDF desde ML."""
+    pdf = await meli.get_label_pdf(shipment_id)
+    if not pdf:
+        return JSONResponse({"error": "No se pudo obtener la etiqueta"}, status_code=404)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="etiqueta-{shipment_id}.pdf"'},
+    )
 
 
 @router.get("/api")

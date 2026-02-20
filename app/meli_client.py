@@ -51,12 +51,49 @@ class MeliClient:
             r.raise_for_status()
             return r.json()
 
+    async def get_items_thumbnails(self, item_ids: list[str]) -> dict[str, str]:
+        """Obtiene thumbnails de múltiples items en grupos de 20."""
+        if not item_ids:
+            return {}
+        thumbnails = {}
+        async with httpx.AsyncClient() as client:
+            for i in range(0, len(item_ids), 20):
+                batch = item_ids[i:i + 20]
+                try:
+                    r = await self._get(
+                        client,
+                        f"{self.BASE_URL}/items",
+                        params={"ids": ",".join(batch)},
+                    )
+                    if r.status_code == 200:
+                        for entry in r.json():
+                            if entry.get("code") == 200:
+                                body = entry.get("body", {})
+                                thumbnails[str(body.get("id", ""))] = body.get("thumbnail", "")
+                except Exception:
+                    pass
+        return thumbnails
+
+    async def get_label_pdf(self, shipment_id: str) -> bytes | None:
+        """Obtiene la etiqueta de envío en PDF desde la API de ML."""
+        async with httpx.AsyncClient() as client:
+            r = await self._get(
+                client,
+                f"{self.BASE_URL}/shipments/{shipment_id}/labels",
+                params={"response_type": "pdf", "shipment_ids": shipment_id},
+            )
+            if r.status_code == 200:
+                return r.content
+        return None
+
     async def get_pending_shipments(self) -> list[dict]:
-        """Obtiene órdenes pagadas y agrega info de envío para ver cuáles faltan por entregar."""
+        """Obtiene órdenes pagadas, info de envío y thumbnails de productos."""
         data = await self.get_recent_orders("paid")
         orders = data.get("results", [])
 
         enriched = []
+        all_item_ids = []
+
         async with httpx.AsyncClient() as client:
             for order in orders:
                 shipping_id = order.get("shipping", {}).get("id")
@@ -69,10 +106,23 @@ class MeliClient:
                     except Exception:
                         pass
 
+                for oi in order.get("order_items", []):
+                    item_id = str(oi.get("item", {}).get("id", ""))
+                    if item_id:
+                        all_item_ids.append(item_id)
+
                 enriched.append({
                     "order": order,
                     "shipment": shipment_info,
+                    "shipment_id": shipping_id,
                 })
+
+        # Fetch thumbnails en batch y adjuntarlos
+        thumbnails = await self.get_items_thumbnails(list(set(all_item_ids)))
+        for entry in enriched:
+            for oi in entry["order"].get("order_items", []):
+                item_id = str(oi.get("item", {}).get("id", ""))
+                oi["item"]["thumbnail"] = thumbnails.get(item_id, "")
 
         return enriched
 
@@ -89,7 +139,6 @@ class MeliClient:
             )
             r.raise_for_status()
             tokens = r.json()
-            # Actualizar en memoria
             settings.ACCESS_TOKEN = tokens["access_token"]
             settings.REFRESH_TOKEN = tokens["refresh_token"]
             self.token = tokens["access_token"]
