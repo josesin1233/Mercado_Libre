@@ -7,7 +7,7 @@ from app.ui import base_layout
 router = APIRouter()
 
 
-# ── Helpers ──
+# ── Date helpers ─────────────────────────────────────────────────────────────
 
 def _parse_date(date_str: str | None) -> datetime | None:
     if not date_str:
@@ -24,6 +24,8 @@ def _format_date_short(date_str: str | None) -> str:
         return "—"
     return dt.strftime("%d/%m %H:%M")
 
+
+# ── Shipment date extractors ──────────────────────────────────────────────────
 
 def _get_deadline(shipment: dict | None) -> str | None:
     """Busca la fecha límite de despacho probando varias rutas del API de ML."""
@@ -77,8 +79,7 @@ def _get_delivery_date(shipment: dict | None) -> str | None:
 
 
 def _get_ship_by_date(shipment: dict | None) -> str | None:
-    """Obtiene la mejor fecha disponible para 'cuándo debería enviarse'.
-    Prioriza: handling_limit > date_first_printed > last_updated."""
+    """Obtiene la mejor fecha disponible para 'cuándo debería enviarse'."""
     deadline = _get_deadline(shipment)
     if deadline:
         return deadline
@@ -89,6 +90,8 @@ def _get_ship_by_date(shipment: dict | None) -> str | None:
         return None
     return shipment.get("date_created")
 
+
+# ── Status classification ─────────────────────────────────────────────────────
 
 def _classify_status(shipment: dict | None, deadline_str: str | None) -> tuple[str, str, str]:
     """
@@ -126,8 +129,8 @@ def _classify_status(shipment: dict | None, deadline_str: str | None) -> tuple[s
     if status == "ready_to_ship":
         if is_delayed:
             sub_labels = {
-                "ready_to_print": "DEMORADO - Imprimir etiqueta",
-                "printed": "DEMORADO - Despachar",
+                "ready_to_print": "DEMORADO — Imprimir",
+                "printed": "DEMORADO — Despachar",
             }
             return sub_labels.get(substatus, "DEMORADO"), "badge-danger", "delayed"
         else:
@@ -145,7 +148,8 @@ def _classify_status(shipment: dict | None, deadline_str: str | None) -> tuple[s
     if status == "not_delivered":
         return "No entregado", "badge-danger", "delayed"
 
-    return f"{status}" + (f" ({substatus})" if substatus else ""), "badge-neutral", "other"
+    label = status + (f" ({substatus})" if substatus else "")
+    return label, "badge-neutral", "other"
 
 
 def _tiempo_restante(deadline_str: str | None) -> tuple[str, str]:
@@ -162,15 +166,17 @@ def _tiempo_restante(deadline_str: str | None) -> tuple[str, str]:
             return f"Hace {abs_h // 24}d {abs_h % 24}h", "badge-danger"
         return f"Hace {abs_h}h", "badge-danger"
     elif hours < 24:
-        return f"{int(hours)}h", "badge-warning"
+        return f"{int(hours)}h restantes", "badge-warning"
     elif hours < 48:
         return f"1d {int(hours - 24)}h", "badge-success"
     else:
-        return f"{int(hours / 24)}d", "badge-success"
+        return f"{int(hours / 24)}d restantes", "badge-success"
 
+
+# ── Data enrichment ───────────────────────────────────────────────────────────
 
 def _enrich_order(item: dict) -> dict:
-    """Enriquece un pedido con datos procesados."""
+    """Enriquece un pedido con datos procesados para UI y API."""
     order = item["order"]
     shipment = item.get("shipment")
 
@@ -184,6 +190,7 @@ def _enrich_order(item: dict) -> dict:
         "order_id": order.get("id", "?"),
         "shipment_id": item.get("shipment_id"),
         "buyer": order.get("buyer", {}).get("nickname", "—"),
+        "buyer_id": order.get("buyer", {}).get("id"),
         "total": order.get("total_amount", 0),
         "currency": order.get("currency_id", "MXN"),
         "date_created": order.get("date_created", ""),
@@ -202,84 +209,82 @@ def _enrich_order(item: dict) -> dict:
             {
                 "title": oi.get("item", {}).get("title", "?"),
                 "qty": oi.get("quantity", 1),
-                "sku": oi.get("item", {}).get("seller_sku", ""),
+                "sku": oi.get("item", {}).get("seller_sku", "") or "",
                 "unit_price": oi.get("unit_price", 0),
-                "thumbnail": oi.get("item", {}).get("thumbnail", ""),
+                "thumbnail": oi.get("item", {}).get("thumbnail", "") or "",
+                "item_id": str(oi.get("item", {}).get("id", "")),
             }
             for oi in order.get("order_items", [])
         ],
     }
 
 
+# ── HTML builders ─────────────────────────────────────────────────────────────
+
 def _build_product_html(items: list[dict]) -> str:
     html = ""
     for p in items:
         sku = f' <span class="sku">SKU: {p["sku"]}</span>' if p.get("sku") else ""
-        html += f'<div class="product-line">{p["title"]} <strong>x{p["qty"]}</strong>{sku}</div>'
+        html += (
+            f'<div class="product-line">'
+            f'{p["title"]} <span class="qty">x{p["qty"]}</span>{sku}'
+            f'</div>'
+        )
     return html
 
 
-# ── Sort helpers ──
-
-CATEGORY_ORDER = {"delayed": 0, "ready": 1, "pending": 2, "shipped": 3, "other": 4}
-
-
-def _sort_key(order: dict) -> tuple:
-    """Ordena: categoría primero (delayed=0), luego por deadline más cercano."""
-    cat = CATEGORY_ORDER.get(order["category"], 99)
-    deadline_dt = _parse_date(order["deadline_str"])
-    if not deadline_dt:
-        deadline_dt = _parse_date(order["date_created"]) or datetime.max.replace(tzinfo=timezone.utc)
-    return (cat, deadline_dt)
-
-
-# ── Page builders ──
-
 def _build_order_card_html(o: dict) -> str:
-    """Card de un pedido para desktop y mobile."""
+    """Card de un pedido — clickable para abrir el modal de detalle."""
     is_delayed = o["category"] == "delayed"
 
-    # Estilos según estado
-    if is_delayed:
-        border_color = "var(--danger)"
-        bg = "var(--danger-bg)"
-        header_bg = "#fecaca"
-    elif o["category"] == "ready":
-        border_color = "var(--accent)"
-        bg = "var(--surface)"
-        header_bg = "var(--accent-soft)"
-    elif o["category"] == "shipped":
-        border_color = "var(--success)"
-        bg = "var(--surface)"
-        header_bg = "var(--success-bg)"
-    else:
-        border_color = "var(--warning)"
-        bg = "var(--surface)"
-        header_bg = "var(--warning-bg)"
+    border_color_map = {
+        "delayed": "var(--danger)",
+        "ready":   "var(--accent)",
+        "shipped": "var(--success)",
+        "pending": "var(--warning)",
+    }
+    header_bg_map = {
+        "delayed": "#fef2f2",
+        "ready":   "var(--accent-soft)",
+        "shipped": "var(--success-bg)",
+        "pending": "var(--warning-bg)",
+    }
+
+    border_color = border_color_map.get(o["category"], "var(--border-strong)")
+    header_bg = header_bg_map.get(o["category"], "var(--surface-2)")
 
     items_html = _build_product_html(o["items"])
-
     deadline_display = _format_date_short(o["deadline_str"]) if o["deadline_str"] else "Sin fecha"
     delivery_display = _format_date_short(o["delivery_str"]) if o.get("delivery_str") else "—"
-
     pulse_class = " pulse" if is_delayed else ""
+    deadline_style = "color:var(--danger);font-weight:700;" if is_delayed else ""
 
-    # Thumbnail principal (primer item con foto)
+    # Thumbnail
     main_thumb = next((i.get("thumbnail", "") for i in o["items"] if i.get("thumbnail")), "")
-    thumb_html = f'<img src="{main_thumb}" class="pedido-thumb" alt="producto">' if main_thumb else '<div class="pedido-thumb pedido-thumb-empty"></div>'
+    if main_thumb:
+        thumb_html = f'<img src="{main_thumb}" class="pedido-thumb" alt="Producto">'
+    else:
+        thumb_html = '<div class="pedido-thumb-empty">📦</div>'
 
+    # Label button
     label_btn = ""
-    if o.get("shipment_id") and o.get("shipping_substatus_raw") in ("ready_to_print", "printed", "handling_time_over"):
-        label_btn = f'<a href="https://www.mercadolibre.com.mx/envios/{o["shipment_id"]}/ver_etiqueta" target="_blank" class="btn btn-label">🖨️ Imprimir etiqueta</a>'
+    ok_sub = ("ready_to_print", "printed", "handling_time_over")
+    if o.get("shipment_id") and o.get("shipping_substatus_raw") in ok_sub:
+        label_btn = (
+            f'<a href="https://www.mercadolibre.com.mx/envios/{o["shipment_id"]}/ver_etiqueta"'
+            f' target="_blank" class="btn-label" onclick="event.stopPropagation()">Imprimir etiqueta</a>'
+        )
 
-    deadline_style = "color:var(--danger);font-weight:700;" if is_delayed else "font-weight:600;"
+    order_id = o["order_id"]
 
     return f"""
-    <div class="pedido-card" style="border-left:4px solid {border_color};background:{bg};">
+    <div class="pedido-card" style="border-left:4px solid {border_color};"
+         onclick="openOrderModal({order_id!r})" role="button" tabindex="0"
+         onkeydown="if(event.key==='Enter')openOrderModal({order_id!r})">
         <div class="pedido-header" style="background:{header_bg};">
             <div class="pedido-title">
-                <strong>Pedido #{o["order_id"]}</strong>
-                <span style="color:var(--text-secondary);font-size:13px;">&middot; {o["buyer"]}</span>
+                <strong>#{order_id}</strong>
+                <span class="buyer">{o["buyer"]}</span>
             </div>
             <div class="pedido-badges">
                 <span class="badge {o["status_cls"]}{pulse_class}">{o["status_label"]}</span>
@@ -321,14 +326,13 @@ def _build_section(title: str, icon: str, orders: list[dict], section_id: str) -
     if not orders:
         return ""
 
-    is_delayed = section_id == "delayed"
-    border_color = {
+    border_map = {
         "delayed": "var(--danger)",
-        "ready": "var(--accent)",
+        "ready":   "var(--accent)",
         "shipped": "var(--success)",
         "pending": "var(--warning)",
-    }.get(section_id, "var(--border)")
-
+    }
+    border_color = border_map.get(section_id, "var(--border)")
     cards_html = "".join(_build_order_card_html(o) for o in orders)
 
     return f"""
@@ -340,180 +344,20 @@ def _build_section(title: str, icon: str, orders: list[dict], section_id: str) -
     </div>"""
 
 
-# ── Extra CSS for pedido cards ──
+# ── Sort helpers ──────────────────────────────────────────────────────────────
 
-VENTAS_CSS = """
-<style>
-    .section {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        box-shadow: var(--shadow);
-        overflow: hidden;
-        margin-bottom: 24px;
-    }
-    .section-header {
-        padding: 16px 20px;
-        border-bottom: 1px solid var(--border);
-    }
-    .section-header h2 {
-        font-size: 16px;
-        font-weight: 600;
-    }
-    .section-count {
-        font-weight: 400;
-        color: var(--text-muted);
-        font-size: 14px;
-    }
-
-    .pedido-card {
-        border-bottom: 1px solid var(--border);
-        transition: background 0.1s ease;
-    }
-    .pedido-card:last-child {
-        border-bottom: none;
-    }
-
-    .pedido-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 12px 20px;
-        flex-wrap: wrap;
-        gap: 8px;
-    }
-    .pedido-title {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        flex-wrap: wrap;
-        font-size: 15px;
-    }
-    .pedido-badges {
-        display: flex;
-        gap: 6px;
-        flex-wrap: wrap;
-    }
-
-    .pedido-body {
-        padding: 12px 20px 16px;
-        display: grid;
-        grid-template-columns: 1fr auto 110px;
-        gap: 20px;
-        align-items: start;
-    }
-
-    .pedido-items {
-        font-size: 14px;
-    }
-    .product-line {
-        padding: 3px 0;
-    }
-    .product-line .sku {
-        color: var(--text-muted);
-        font-size: 11px;
-    }
-
-    .pedido-thumb-wrap {
-        display: flex;
-        align-items: flex-start;
-        justify-content: center;
-        padding-top: 2px;
-    }
-    .pedido-thumb {
-        width: 100px;
-        height: 100px;
-        object-fit: contain;
-        border-radius: 10px;
-        border: 1px solid var(--border);
-        background: #fff;
-    }
-    .pedido-thumb-empty {
-        width: 100px;
-        height: 100px;
-        border-radius: 10px;
-        border: 1px dashed var(--border);
-        background: var(--bg);
-    }
-
-    .btn-label {
-        font-size: 12px;
-        padding: 4px 10px;
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        color: var(--text);
-        text-decoration: none;
-        white-space: nowrap;
-    }
-    .btn-label:hover {
-        background: var(--accent-soft);
-        border-color: var(--accent);
-    }
-
-    .pedido-meta {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 8px 24px;
-        font-size: 13px;
-        align-content: start;
-    }
-    .meta-item {
-        display: flex;
-        flex-direction: column;
-    }
-    .meta-label {
-        color: var(--text-muted);
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.3px;
-    }
-    .meta-value {
-        color: var(--text);
-        margin-top: 1px;
-    }
-
-    /* Pulse animation for delayed badges */
-    .badge.pulse {
-        animation: badge-pulse 2s ease-in-out infinite;
-    }
-    @keyframes badge-pulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.6; }
-    }
-
-    @media (max-width: 768px) {
-        .pedido-header {
-            padding: 10px 14px;
-            flex-direction: column;
-            align-items: flex-start;
-        }
-        .pedido-body {
-            padding: 10px 14px 14px;
-            grid-template-columns: 1fr auto;
-            gap: 12px;
-        }
-        .pedido-thumb-wrap {
-            grid-column: 2;
-            grid-row: 1 / 3;
-        }
-        .pedido-thumb, .pedido-thumb-empty {
-            width: 72px;
-            height: 72px;
-        }
-        .pedido-meta {
-            grid-template-columns: 1fr 1fr;
-            gap: 10px;
-        }
-        .section-header {
-            padding: 12px 14px;
-        }
-    }
-</style>
-"""
+CATEGORY_ORDER = {"delayed": 0, "ready": 1, "pending": 2, "shipped": 3, "other": 4}
 
 
-# ── Routes ──
+def _sort_key(order: dict) -> tuple:
+    cat = CATEGORY_ORDER.get(order["category"], 99)
+    deadline_dt = _parse_date(order["deadline_str"])
+    if not deadline_dt:
+        deadline_dt = _parse_date(order["date_created"]) or datetime.max.replace(tzinfo=timezone.utc)
+    return (cat, deadline_dt)
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.get("/", response_class=HTMLResponse)
 async def ventas_pendientes():
@@ -522,15 +366,22 @@ async def ventas_pendientes():
         data = await meli.get_pending_shipments()
     except Exception as e:
         error_content = f"""
-            <h1 class="page-title">Ventas Pendientes</h1>
-            <div style="background:var(--danger-bg);border:1px solid #fecaca;border-radius:var(--radius);padding:20px;margin-top:20px;">
-                <strong style="color:#991b1b;">Error al obtener ventas</strong>
-                <p style="color:#b91c1c;font-size:13px;margin-top:4px;">{e}</p>
-                <p style="font-size:13px;margin-top:8px;">Verifica que ACCESS_TOKEN y USER_ID estén configurados.</p>
+            <div class="page-header">
+                <div>
+                    <h1 class="page-title">Ventas Pendientes</h1>
+                    <p class="page-subtitle">Pedidos organizados por prioridad de envío</p>
+                </div>
+            </div>
+            <div class="error-banner">
+                <div>
+                    <strong>Error al conectar con Mercado Libre</strong>
+                    <p>{e}</p>
+                    <p style="margin-top:6px;font-size:12px;">Verifica que ACCESS_TOKEN y USER_ID estén configurados.</p>
+                </div>
             </div>"""
-        return HTMLResponse(content=base_layout("Error", error_content, active="ventas"), status_code=500)
+        return HTMLResponse(content=base_layout("Error — Ventas", error_content, active="ventas"), status_code=500)
 
-    # Enriquecer y filtrar
+    # Enriquecer y filtrar entregados/cancelados
     orders = []
     for item in data:
         shipment = item.get("shipment")
@@ -538,26 +389,23 @@ async def ventas_pendientes():
             continue
         orders.append(_enrich_order(item))
 
-    # Ordenar por prioridad y luego deadline
     orders.sort(key=_sort_key)
 
-    # Separar por categoría
     delayed = [o for o in orders if o["category"] == "delayed"]
-    ready = [o for o in orders if o["category"] == "ready"]
+    ready   = [o for o in orders if o["category"] == "ready"]
     pending = [o for o in orders if o["category"] == "pending"]
     shipped = [o for o in orders if o["category"] == "shipped"]
 
     total_amount = sum(o["total"] for o in orders)
+    n = len(orders)
 
     content = f"""
-        {VENTAS_CSS}
-
-        <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:8px;">
+        <div class="page-header">
             <div>
                 <h1 class="page-title">Ventas Pendientes</h1>
-                <p class="page-subtitle">Pedidos organizados por prioridad de envío</p>
+                <p class="page-subtitle">Pedidos organizados por prioridad de envío — haz clic en un pedido para ver el detalle</p>
             </div>
-            <a href="/ventas/" class="btn" onclick="this.innerHTML='Cargando...';this.style.pointerEvents='none';">Actualizar</a>
+            <a href="/ventas/" class="btn" onclick="this.textContent='Cargando…';this.style.pointerEvents='none';">Actualizar</a>
         </div>
 
         <div class="stats">
@@ -579,7 +427,7 @@ async def ventas_pendientes():
             <div class="stat-card">
                 <div class="stat-label">Venta total</div>
                 <div class="stat-value">${total_amount:,.0f}</div>
-                <div class="stat-detail">MXN en {len(orders)} pedido{"s" if len(orders) != 1 else ""}</div>
+                <div class="stat-detail">MXN · {n} pedido{"s" if n != 1 else ""}</div>
             </div>
         </div>
 
@@ -588,9 +436,60 @@ async def ventas_pendientes():
         {_build_section("Pendientes", "⏳", pending, "pending")}
         {_build_section("En camino", "🚚", shipped, "shipped")}
 
-        {"" if orders else '<div class="empty-state"><div class="icon">🎉</div><p>No hay ventas pendientes</p></div>'}
+        {"" if orders else '<div class="empty-state"><span class="icon">🎉</span><p>No hay ventas pendientes</p></div>'}
     """
     return HTMLResponse(content=base_layout("Ventas Pendientes", content, active="ventas"))
+
+
+@router.get("/api/orden/{order_id}")
+async def ventas_orden_api(order_id: str):
+    """JSON de detalle de una orden específica — consumido por el modal."""
+    if not order_id.isdigit():
+        return JSONResponse({"error": "order_id inválido"}, status_code=400)
+    try:
+        data = await meli.get_pending_shipments()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    # Buscar la orden en los datos
+    for item in data:
+        oid = str(item["order"].get("id", ""))
+        if oid == order_id:
+            enriched = _enrich_order(item)
+            return JSONResponse(enriched)
+
+    # No estaba en cache; intentar fetch directo
+    try:
+        order_data = await meli.get_order(order_id)
+        shipping_id = order_data.get("shipping", {}).get("id")
+        shipment_data = None
+        if shipping_id:
+            try:
+                shipment_data = await meli.get_shipment(str(shipping_id))
+            except Exception:
+                pass
+
+        # Fetch thumbnails para los items
+        item_ids = [
+            str(oi.get("item", {}).get("id", ""))
+            for oi in order_data.get("order_items", [])
+            if oi.get("item", {}).get("id")
+        ]
+        thumbnails = await meli.get_items_thumbnails(item_ids) if item_ids else {}
+        for oi in order_data.get("order_items", []):
+            item_obj = oi.get("item")
+            if isinstance(item_obj, dict):
+                item_obj["thumbnail"] = thumbnails.get(str(item_obj.get("id", "")), "")
+
+        synthetic = {
+            "order": order_data,
+            "shipment": shipment_data,
+            "shipment_id": shipping_id,
+        }
+        enriched = _enrich_order(synthetic)
+        return JSONResponse(enriched)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
 
 
 @router.get("/debug")
@@ -605,8 +504,6 @@ async def ventas_debug():
     for item in data:
         shipment = item.get("shipment")
         order = item["order"]
-
-        # Extraer todas las fechas posibles del shipment
         fechas = {}
         if shipment:
             fechas = {
@@ -617,7 +514,6 @@ async def ventas_debug():
                 "estimated_handling_limit": shipment.get("estimated_handling_limit"),
                 "estimated_delivery_time": shipment.get("estimated_delivery_time"),
             }
-
         results.append({
             "order_id": order.get("id"),
             "order_status": order.get("status"),
@@ -635,6 +531,8 @@ async def ventas_debug():
 @router.get("/etiqueta/{shipment_id}")
 async def get_etiqueta(shipment_id: str):
     """Descarga la etiqueta de envío en PDF desde ML."""
+    if not shipment_id.isdigit():
+        return JSONResponse({"error": "shipment_id inválido"}, status_code=400)
     pdf = await meli.get_label_pdf(shipment_id)
     if not pdf:
         return JSONResponse({"error": "No se pudo obtener la etiqueta"}, status_code=404)
@@ -647,7 +545,7 @@ async def get_etiqueta(shipment_id: str):
 
 @router.get("/api")
 async def ventas_api():
-    """JSON de ventas pendientes."""
+    """JSON de todas las ventas pendientes."""
     try:
         data = await meli.get_pending_shipments()
     except Exception as e:

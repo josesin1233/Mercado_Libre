@@ -38,7 +38,10 @@ async def receive_webhook(payload: WebhookPayload):
 
     if payload.topic == "orders_v2":
         # Extraer order_id del resource: /orders/12345
-        order_id = payload.resource.split("/")[-1]
+        parts = payload.resource.rsplit("/", 1)
+        order_id = parts[-1] if parts else ""
+        if not order_id or not order_id.isdigit():
+            return {"status": "error", "detail": f"resource inválido: {payload.resource!r}"}
         try:
             order_data = await meli.get_order(order_id)
 
@@ -80,9 +83,9 @@ async def receive_webhook(payload: WebhookPayload):
 
             # Si ya está completada, la eliminamos; si no, la agregamos
             if order.is_completed():
-                order_manager.remove_order(order.order_id)
+                await order_manager.remove_order(order.order_id)
             else:
-                order_manager.add_order(order)
+                await order_manager.add_order(order)
 
             return {"status": "processed", "order_id": order_id, "priority": priority}
 

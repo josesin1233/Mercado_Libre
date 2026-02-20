@@ -1,5 +1,8 @@
 import httpx
+import logging
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class MeliClient:
@@ -69,8 +72,8 @@ class MeliClient:
                             if entry.get("code") == 200:
                                 body = entry.get("body", {})
                                 thumbnails[str(body.get("id", ""))] = body.get("thumbnail", "")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Error al obtener thumbnails batch %s: %s", batch, exc)
         return thumbnails
 
     async def get_label_pdf(self, shipment_id: str) -> bytes | None:
@@ -112,8 +115,10 @@ class MeliClient:
                         r = await self._get(client, f"{self.BASE_URL}/shipments/{shipping_id}")
                         if r.status_code == 200:
                             shipment_info = r.json()
-                    except Exception:
-                        pass
+                        else:
+                            logger.warning("Shipment %s devolvió %s", shipping_id, r.status_code)
+                    except Exception as exc:
+                        logger.warning("Error al obtener shipment %s: %s", shipping_id, exc)
 
                 for oi in order.get("order_items", []):
                     item_id = str(oi.get("item", {}).get("id", ""))
@@ -130,8 +135,10 @@ class MeliClient:
         thumbnails = await self.get_items_thumbnails(list(set(all_item_ids)))
         for entry in enriched:
             for oi in entry["order"].get("order_items", []):
-                item_id = str(oi.get("item", {}).get("id", ""))
-                oi["item"]["thumbnail"] = thumbnails.get(item_id, "")
+                item_obj = oi.get("item")
+                if isinstance(item_obj, dict):
+                    item_id = str(item_obj.get("id", ""))
+                    item_obj["thumbnail"] = thumbnails.get(item_id, "")
 
         return enriched
 

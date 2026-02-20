@@ -1,0 +1,137 @@
+================================================================
+PROGRESO - Mejoras Mercado Libre Dashboard
+Iniciado: 2026-02-20
+================================================================
+
+FASE 1: LECTURA DE ARCHIVOS
+[x] main.py
+[x] app/__init__.py
+[x] app/auth.py
+[x] app/config.py
+[x] app/meli_client.py
+[x] app/models.py
+[x] app/order_manager.py
+[x] app/routes/__init__.py
+[x] app/routes/dashboard.py
+[x] app/routes/notifications.py
+[x] app/routes/notificaciones_page.py
+[x] app/routes/orders.py
+[x] app/routes/ventas.py
+[x] app/routes/webhooks.py
+[x] app/scheduler.py
+[x] app/ui.py
+[x] requirements.txt
+
+PROBLEMAS IDENTIFICADOS:
+-----------------------------------------
+1. BUG - ShippingPriority str Enum comparada con int (notificaciones_page.py línea 19)
+2. RACE CONDITION - OrderManager sin asyncio.Lock
+3. SEGURIDAD - auth.py expone tokens en respuesta JSON
+4. CÓDIGO MUERTO - Error silenciado sin logging en meli_client.py
+5. BUG - Thumbnail asignado con oi["item"]["thumbnail"] sin verificar que "item" exista
+6. DUPLICACIÓN - Lógica de cards duplicada entre dashboard.py y ventas.py
+7. FALTA - Vista de detalle de orden (modal) completamente ausente
+8. UI - Diseño funcional pero no profesional ni pulido
+9. FALTA VALIDACIÓN - webhooks.py extrae order_id sin validar formato
+10. INCONSISTENCIA - VENTAS_CSS incrustado en ventas.py en vez de ui.py
+
+FASE 2: CORRECCIONES Y MEJORAS
+[x] Crear PROGRESO.txt
+[x] Corregir bug ShippingPriority en notificaciones_page.py
+    - Reemplazado comparación .value <= 1 / == 2 (int) por comparación enum directa
+[x] Agregar asyncio.Lock en OrderManager para thread-safety
+    - add_order, remove_order, cleanup_completed ahora son async con Lock
+[x] Actualizar scheduler.py para usar cleanup_completed() async
+[x] Actualizar webhooks.py para usar add_order/remove_order async
+[x] Agregar validación de order_id en webhooks.py
+    - Ahora valida que sea dígito antes de hacer fetch
+[x] Agregar logging en meli_client.py
+    - Silenced exceptions ahora loguean warnings
+[x] Corregir bug de thumbnail en meli_client.py
+    - Ahora verifica isinstance(item_obj, dict) antes de asignar thumbnail
+[x] Rediseño completo de ui.py
+    - Nuevo sistema de diseño con variables CSS profesionales
+    - Navbar mejorada con logo, brand-tag, mejores hover states
+    - Stat cards con colores en valores según tipo
+    - Badges con colores de texto más ricos
+    - Botones con estados hover más definidos
+    - Responsive mejorado
+    - Modal de detalle de orden completo (HTML + CSS + JavaScript)
+[x] Implementar modal de detalle de orden
+    - HTML del modal en ui.py (MODAL_HTML)
+    - JavaScript para fetch y renderizado en ui.py (MODAL_JS)
+    - Nuevo endpoint GET /ventas/api/orden/{order_id} en ventas.py
+    - Diseño tipo página de producto de Mercado Libre:
+      * Foto grande del producto a la izquierda
+      * Título, status badges, metadatos del pedido a la derecha
+      * Sección de artículos con thumbnails, qty, precio unitario
+      * Footer con total y botón de imprimir etiqueta
+      * Animación de entrada suave
+      * Cierre con backdrop click o tecla ESC
+[x] Reescribir ventas.py
+    - Eliminado VENTAS_CSS (movido a ui.py)
+    - Cards ahora tienen onclick para abrir modal
+    - Nuevo endpoint /ventas/api/orden/{order_id} para datos JSON
+    - Fallback: si la orden no está en cache, hace fetch directo a ML API
+    - Validación de order_id e shipment_id
+    - product-line mejorado con .qty styled badge
+[x] Reescribir dashboard.py
+    - Eliminada duplicación de card-building logic
+    - Cards ahora son clickables y abren el modal
+    - Usa base_layout que incluye el modal
+    - Diseño unificado con ventas.py
+[x] Reescribir notificaciones_page.py
+    - Bug de prioridad corregido
+    - Mini bar chart en tabla de productos más vendidos
+    - Empty states mejorados
+
+FASE 3: COMMIT Y PUSH
+[ ] git add + commit + push
+
+RESUMEN DE CAMBIOS POR ARCHIVO:
+-----------------------------------------
+app/ui.py
+  - Rediseño completo del design system (variables CSS, tipografía, sombras)
+  - Navbar profesional con logo y tag
+  - Stat cards con colores de valor según tipo
+  - Pedido cards con hover effects y cursor pointer
+  - NUEVO: Modal de detalle de orden completo (HTML + CSS + JS)
+  - NUEVO: GLOBAL_CSS, MODAL_HTML, MODAL_JS exportados
+
+app/order_manager.py
+  - asyncio.Lock agregado para thread-safety
+  - add_order, remove_order, cleanup_completed son ahora async
+
+app/scheduler.py
+  - await cleanup_completed() (ahora es coroutine)
+  - try/except en el loop para no matar la tarea si hay error
+
+app/routes/webhooks.py
+  - Validación de order_id antes de fetch
+  - await add_order / remove_order (ahora son coroutines)
+
+app/routes/ventas.py
+  - Eliminado VENTAS_CSS embebido (ahora en ui.py)
+  - Cards con onclick -> modal
+  - NUEVO endpoint: GET /ventas/api/orden/{order_id}
+  - Validación de inputs
+  - product-line con .qty badge styled
+
+app/routes/dashboard.py
+  - Cards clickables (abren modal)
+  - Sin duplicación de lógica con ventas.py
+  - Usa el mismo base_layout con modal incluido
+
+app/routes/notificaciones_page.py
+  - BUG CORREGIDO: ShippingPriority comparada correctamente (no .value int)
+  - Mini bar chart en productos más vendidos
+  - Empty states con icono emoji
+
+app/meli_client.py
+  - logging importado y usado
+  - Silent except → logger.warning
+  - Bug thumbnail corregido (isinstance check)
+
+================================================================
+COMPLETADO: 2026-02-20
+================================================================
