@@ -3,38 +3,19 @@ from fastapi.responses import RedirectResponse
 from app.config import settings
 from app.meli_client import meli
 import httpx
-import secrets
-import hashlib
-import base64
 import traceback
 
 router = APIRouter()
-
-# Almacenar code_verifier entre login y callback
-_pkce_store: dict[str, str] = {}
-
-
-def generate_pkce():
-    """Genera code_verifier y code_challenge para PKCE."""
-    code_verifier = secrets.token_urlsafe(64)
-    digest = hashlib.sha256(code_verifier.encode()).digest()
-    code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
-    return code_verifier, code_challenge
 
 
 @router.get("/login")
 def login():
     """Redirige al usuario a Mercado Libre para autorizar la app."""
-    code_verifier, code_challenge = generate_pkce()
-    _pkce_store["verifier"] = code_verifier
-
     auth_url = (
         f"https://auth.mercadolibre.com.mx/authorization"
         f"?response_type=code"
         f"&client_id={settings.APP_ID}"
         f"&redirect_uri={settings.REDIRECT_URI}"
-        f"&code_challenge={code_challenge}"
-        f"&code_challenge_method=S256"
         f"&scope=offline_access+read+write"
     )
     return RedirectResponse(url=auth_url)
@@ -44,15 +25,12 @@ def login():
 async def callback(code: str):
     """Recibe el código de autorización y lo intercambia por tokens."""
     try:
-        code_verifier = _pkce_store.get("verifier", "")
-
         payload = {
             "grant_type": "authorization_code",
             "client_id": settings.APP_ID,
             "client_secret": settings.CLIENT_SECRET,
             "code": code,
             "redirect_uri": settings.REDIRECT_URI,
-            "code_verifier": code_verifier,
         }
 
         async with httpx.AsyncClient() as client:
@@ -73,7 +51,6 @@ async def callback(code: str):
                     "secret_set": bool(settings.CLIENT_SECRET),
                     "redirect_uri": settings.REDIRECT_URI,
                     "code_received": code,
-                    "verifier_set": bool(code_verifier),
                 },
             }
 
@@ -97,5 +74,4 @@ async def callback(code: str):
             "status": "crash",
             "error": str(e),
             "traceback": traceback.format_exc(),
-            "verifier_existed": "verifier" in _pkce_store,
         }
