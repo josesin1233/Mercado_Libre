@@ -215,8 +215,7 @@ def _build_product_html(items: list[dict]) -> str:
     html = ""
     for p in items:
         sku = f' <span class="sku">SKU: {p["sku"]}</span>' if p.get("sku") else ""
-        thumb = f'<img src="{p["thumbnail"]}" class="product-thumb" alt="">' if p.get("thumbnail") else '<div class="product-thumb-placeholder"></div>'
-        html += f'<div class="product-line">{thumb}<div><div>{p["title"]} <strong>x{p["qty"]}</strong>{sku}</div></div></div>'
+        html += f'<div class="product-line">{p["title"]} <strong>x{p["qty"]}</strong>{sku}</div>'
     return html
 
 
@@ -259,16 +258,21 @@ def _build_order_card_html(o: dict) -> str:
         header_bg = "var(--warning-bg)"
 
     items_html = _build_product_html(o["items"])
-    total_items = sum(i["qty"] for i in o["items"])
 
     deadline_display = _format_date_short(o["deadline_str"]) if o["deadline_str"] else "Sin fecha"
     delivery_display = _format_date_short(o["delivery_str"]) if o.get("delivery_str") else "—"
 
     pulse_class = " pulse" if is_delayed else ""
 
+    # Thumbnail principal (primer item con foto)
+    main_thumb = next((i.get("thumbnail", "") for i in o["items"] if i.get("thumbnail")), "")
+    thumb_html = f'<img src="{main_thumb}" class="pedido-thumb" alt="producto">' if main_thumb else '<div class="pedido-thumb pedido-thumb-empty"></div>'
+
     label_btn = ""
     if o.get("shipment_id") and o.get("shipping_substatus_raw") in ("ready_to_print", "printed", "handling_time_over"):
-        label_btn = f'<a href="/ventas/etiqueta/{o["shipment_id"]}" target="_blank" class="btn btn-label">🖨️ Imprimir etiqueta</a>'
+        label_btn = f'<a href="https://www.mercadolibre.com.mx/envios/{o["shipment_id"]}/ver_etiqueta" target="_blank" class="btn btn-label">🖨️ Imprimir etiqueta</a>'
+
+    deadline_style = "color:var(--danger);font-weight:700;" if is_delayed else "font-weight:600;"
 
     return f"""
     <div class="pedido-card" style="border-left:4px solid {border_color};background:{bg};">
@@ -288,7 +292,6 @@ def _build_order_card_html(o: dict) -> str:
             <div class="pedido-items">
                 {items_html}
             </div>
-
             <div class="pedido-meta">
                 <div class="meta-item">
                     <span class="meta-label">Fecha de venta</span>
@@ -296,7 +299,7 @@ def _build_order_card_html(o: dict) -> str:
                 </div>
                 <div class="meta-item">
                     <span class="meta-label">Despachar antes de</span>
-                    <span class="meta-value" style="{"color:var(--danger);font-weight:700;" if is_delayed else "font-weight:600;"}">{deadline_display}</span>
+                    <span class="meta-value" style="{deadline_style}">{deadline_display}</span>
                 </div>
                 <div class="meta-item">
                     <span class="meta-label">Entrega estimada</span>
@@ -306,6 +309,9 @@ def _build_order_card_html(o: dict) -> str:
                     <span class="meta-label">Total</span>
                     <span class="meta-value"><strong>${o["total"]:,.2f} {o["currency"]}</strong></span>
                 </div>
+            </div>
+            <div class="pedido-thumb-wrap">
+                {thumb_html}
             </div>
         </div>
     </div>"""
@@ -392,39 +398,44 @@ VENTAS_CSS = """
     .pedido-body {
         padding: 12px 20px 16px;
         display: grid;
-        grid-template-columns: 1fr auto;
+        grid-template-columns: 1fr auto 110px;
         gap: 20px;
+        align-items: start;
     }
 
     .pedido-items {
         font-size: 14px;
     }
     .product-line {
-        padding: 4px 0;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-    .product-thumb {
-        width: 48px;
-        height: 48px;
-        object-fit: contain;
-        border-radius: 6px;
-        border: 1px solid var(--border);
-        background: #fff;
-        flex-shrink: 0;
-    }
-    .product-thumb-placeholder {
-        width: 48px;
-        height: 48px;
-        border-radius: 6px;
-        border: 1px dashed var(--border);
-        flex-shrink: 0;
+        padding: 3px 0;
     }
     .product-line .sku {
         color: var(--text-muted);
         font-size: 11px;
     }
+
+    .pedido-thumb-wrap {
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 2px;
+    }
+    .pedido-thumb {
+        width: 100px;
+        height: 100px;
+        object-fit: contain;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: #fff;
+    }
+    .pedido-thumb-empty {
+        width: 100px;
+        height: 100px;
+        border-radius: 10px;
+        border: 1px dashed var(--border);
+        background: var(--bg);
+    }
+
     .btn-label {
         font-size: 12px;
         padding: 4px 10px;
@@ -479,8 +490,16 @@ VENTAS_CSS = """
         }
         .pedido-body {
             padding: 10px 14px 14px;
-            grid-template-columns: 1fr;
+            grid-template-columns: 1fr auto;
             gap: 12px;
+        }
+        .pedido-thumb-wrap {
+            grid-column: 2;
+            grid-row: 1 / 3;
+        }
+        .pedido-thumb, .pedido-thumb-empty {
+            width: 72px;
+            height: 72px;
         }
         .pedido-meta {
             grid-template-columns: 1fr 1fr;

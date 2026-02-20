@@ -49,21 +49,34 @@ async def dashboard():
         bg_style = "background:var(--danger-bg);" if is_delayed else ""
         productos = _build_product_html(o["items"])
 
+        label_btn = ""
+        if o.get("shipment_id") and o.get("shipping_substatus_raw") in ("ready_to_print", "printed", "handling_time_over"):
+            label_btn = f'<a href="https://www.mercadolibre.com.mx/envios/{o["shipment_id"]}/ver_etiqueta" target="_blank" style="font-size:12px;padding:3px 8px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);text-decoration:none;">🖨️ Etiqueta</a>'
+
+        main_thumb = next((i.get("thumbnail", "") for i in o["items"] if i.get("thumbnail")), "")
+        thumb_html = f'<img src="{main_thumb}" style="width:56px;height:56px;object-fit:contain;border-radius:8px;border:1px solid var(--border);background:#fff;flex-shrink:0;" alt="">' if main_thumb else ""
+
         recent_cards += f"""<div class="order-card" style="{border}{bg_style}">
             <div class="order-card-header">
                 <div>
                     <div class="order-id">Pedido #{o["order_id"]}</div>
                     <div style="font-size:12px;color:var(--text-muted);">{_format_date_short(o["date_created"])} &middot; {o["buyer"]}</div>
                 </div>
-                <div style="display:flex;gap:4px;flex-wrap:wrap;">
+                <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
                     <span class="badge {o["status_cls"]}">{o["status_label"]}</span>
                     <span class="badge {o["tiempo_cls"]}">{o["tiempo_text"]}</span>
+                    {label_btn}
                 </div>
             </div>
-            <div class="order-card-products">{productos}</div>
-            <div class="order-card-row">
-                <span class="label">Total</span>
-                <strong>${o["total"]:,.2f}</strong>
+            <div style="display:flex;gap:12px;align-items:flex-start;">
+                <div style="flex:1;">
+                    <div class="order-card-products">{productos}</div>
+                    <div class="order-card-row">
+                        <span class="label">Total</span>
+                        <strong>${o["total"]:,.2f}</strong>
+                    </div>
+                </div>
+                {thumb_html}
             </div>
         </div>"""
 
