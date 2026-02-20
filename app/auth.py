@@ -4,25 +4,40 @@ from app.config import settings
 from app.meli_client import meli
 import httpx
 import traceback
+import secrets
+import hashlib
+import base64
 
 router = APIRouter()
+
+
+def _generate_pkce():
+    code_verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(code_verifier.encode()).digest()
+    code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    return code_verifier, code_challenge
 
 
 @router.get("/login")
 def login():
     """Redirige al usuario a Mercado Libre para autorizar la app."""
+    code_verifier, code_challenge = _generate_pkce()
+
     auth_url = (
         f"https://auth.mercadolibre.com.mx/authorization"
         f"?response_type=code"
         f"&client_id={settings.APP_ID}"
         f"&redirect_uri={settings.REDIRECT_URI}"
         f"&scope=offline_access+read+write"
+        f"&code_challenge={code_challenge}"
+        f"&code_challenge_method=S256"
+        f"&state={code_verifier}"
     )
     return RedirectResponse(url=auth_url)
 
 
 @router.get("/callback")
-async def callback(code: str):
+async def callback(code: str, state: str = ""):
     """Recibe el código de autorización y lo intercambia por tokens."""
     try:
         payload = {
@@ -31,6 +46,7 @@ async def callback(code: str):
             "client_secret": settings.CLIENT_SECRET,
             "code": code,
             "redirect_uri": settings.REDIRECT_URI,
+            "code_verifier": state,
         }
 
         async with httpx.AsyncClient() as client:
