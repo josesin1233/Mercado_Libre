@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 from app.meli_client import meli
-from app.routes.ventas import _enrich_item, _format_date_short, _build_product_html
+from app.routes.ventas import _enrich_order, _format_date_short, _build_product_html, _sort_key
 from app.ui import base_layout
 
 router = APIRouter()
@@ -10,12 +10,11 @@ router = APIRouter()
 @router.get("/", response_class=HTMLResponse)
 async def dashboard():
     """Dashboard principal con resumen general."""
-    total_pending = 0
     delayed_count = 0
     ready_count = 0
     shipped_count = 0
     total_amount = 0
-    recent = []
+    orders = []
     error_msg = ""
 
     try:
@@ -25,9 +24,8 @@ async def dashboard():
             shipment = item.get("shipment")
             if shipment and shipment.get("status") in ("delivered", "cancelled"):
                 continue
-
-            enriched = _enrich_item(item)
-            total_pending += 1
+            enriched = _enrich_order(item)
+            orders.append(enriched)
             total_amount += enriched["total"]
 
             if enriched["category"] == "delayed":
@@ -37,48 +35,35 @@ async def dashboard():
             elif enriched["category"] == "shipped":
                 shipped_count += 1
 
-            if len(recent) < 5:
-                recent.append(enriched)
+        orders.sort(key=_sort_key)
     except Exception as e:
         error_msg = str(e)
 
-    # Recent rows
-    recent_rows = ""
+    # Recent orders (max 5)
+    recent = orders[:5]
+
     recent_cards = ""
     for o in recent:
         is_delayed = o["category"] == "delayed"
-        row_bg = ' style="background:var(--danger-bg);"' if is_delayed else ""
-        card_border = "border-left:4px solid var(--danger);" if is_delayed else ""
+        border = "border-left:4px solid var(--danger);" if is_delayed else ""
+        bg_style = "background:var(--danger-bg);" if is_delayed else ""
+        productos = _build_product_html(o["items"])
 
-        productos = _build_product_html(o["productos"])
-
-        recent_rows += f"""<tr{row_bg}>
-            <td><strong>#{o["order_id"]}</strong><br><small style="color:var(--text-muted);">{_format_date_short(o["date_created"])}</small></td>
-            <td>{o["buyer"]}</td>
-            <td style="max-width:250px;font-size:13px;">{productos}</td>
-            <td><strong>${o["total"]:,.2f}</strong></td>
-            <td><span class="badge {o["status_cls"]}">{o["status_label"]}</span></td>
-            <td><span class="badge {o["tiempo_cls"]}">{o["tiempo_text"]}</span></td>
-        </tr>"""
-
-        recent_cards += f"""<div class="order-card" style="{card_border}">
+        recent_cards += f"""<div class="order-card" style="{border}{bg_style}">
             <div class="order-card-header">
                 <div>
-                    <div class="order-id">#{o["order_id"]}</div>
+                    <div class="order-id">Pedido #{o["order_id"]}</div>
                     <div style="font-size:12px;color:var(--text-muted);">{_format_date_short(o["date_created"])} &middot; {o["buyer"]}</div>
                 </div>
-                <span class="badge {o["tiempo_cls"]}">{o["tiempo_text"]}</span>
+                <div style="display:flex;gap:4px;flex-wrap:wrap;">
+                    <span class="badge {o["status_cls"]}">{o["status_label"]}</span>
+                    <span class="badge {o["tiempo_cls"]}">{o["tiempo_text"]}</span>
+                </div>
             </div>
             <div class="order-card-products">{productos}</div>
-            <div class="order-card-body">
-                <div class="order-card-row">
-                    <span class="label">Monto</span>
-                    <strong>${o["total"]:,.2f}</strong>
-                </div>
-                <div class="order-card-row">
-                    <span class="label">Estado</span>
-                    <span class="badge {o["status_cls"]}">{o["status_label"]}</span>
-                </div>
+            <div class="order-card-row">
+                <span class="label">Total</span>
+                <strong>${o["total"]:,.2f}</strong>
             </div>
         </div>"""
 
@@ -114,31 +99,18 @@ async def dashboard():
             <div class="stat-card">
                 <div class="stat-label">Venta total</div>
                 <div class="stat-value">${total_amount:,.0f}</div>
-                <div class="stat-detail">MXN en {total_pending} pedidos</div>
+                <div class="stat-detail">MXN en {len(orders)} pedidos</div>
             </div>
         </div>
 
         <div class="table-wrapper">
             <div class="table-header">
-                <h2>Ventas recientes</h2>
-                <a href="/ventas/" class="btn btn-primary">Ver todas</a>
+                <h2>Pedidos recientes</h2>
+                <a href="/ventas/" class="btn btn-primary">Ver todos</a>
             </div>
-            {f'''<div class="table-desktop">
-                <table>
-                    <thead><tr>
-                        <th>Orden</th>
-                        <th>Comprador</th>
-                        <th>Productos</th>
-                        <th>Monto</th>
-                        <th>Estado</th>
-                        <th>Plazo</th>
-                    </tr></thead>
-                    <tbody>{recent_rows}</tbody>
-                </table>
+            <div style="padding:12px;">
+                {recent_cards if recent_cards else '<div class="empty-state"><div class="icon">📦</div><p>No hay ventas pendientes</p></div>'}
             </div>
-            <div class="order-cards" style="padding:12px;">{recent_cards}</div>'''
-            if recent else
-            '<div class="empty-state"><div class="icon">📦</div><p>No hay ventas pendientes</p></div>'}
         </div>
     """
     return HTMLResponse(content=base_layout("Dashboard", content, active="dashboard"))

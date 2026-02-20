@@ -11,21 +11,23 @@ class MeliClient:
     def _headers(self):
         return {"Authorization": f"Bearer {self.token}"}
 
+    async def _get(self, client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
+        """GET con retry automático si el token expiró (401)."""
+        r = await client.get(url, headers=self._headers(), **kwargs)
+        if r.status_code == 401 and settings.REFRESH_TOKEN:
+            await self.refresh_access_token()
+            r = await client.get(url, headers=self._headers(), **kwargs)
+        return r
+
     async def get_order(self, order_id: str) -> dict:
         async with httpx.AsyncClient() as client:
-            r = await client.get(
-                f"{self.BASE_URL}/orders/{order_id}",
-                headers=self._headers(),
-            )
+            r = await self._get(client, f"{self.BASE_URL}/orders/{order_id}")
             r.raise_for_status()
             return r.json()
 
     async def get_shipment(self, shipment_id: str) -> dict:
         async with httpx.AsyncClient() as client:
-            r = await client.get(
-                f"{self.BASE_URL}/shipments/{shipment_id}",
-                headers=self._headers(),
-            )
+            r = await self._get(client, f"{self.BASE_URL}/shipments/{shipment_id}")
             r.raise_for_status()
             return r.json()
 
@@ -36,7 +38,8 @@ class MeliClient:
     async def get_recent_orders(self, status: str = "paid") -> dict:
         """Busca órdenes recientes del vendedor filtradas por status."""
         async with httpx.AsyncClient() as client:
-            r = await client.get(
+            r = await self._get(
+                client,
                 f"{self.BASE_URL}/orders/search",
                 params={
                     "seller": settings.USER_ID,
@@ -44,7 +47,6 @@ class MeliClient:
                     "sort": "date_desc",
                     "limit": 50,
                 },
-                headers=self._headers(),
             )
             r.raise_for_status()
             return r.json()
@@ -61,10 +63,7 @@ class MeliClient:
                 shipment_info = None
                 if shipping_id:
                     try:
-                        r = await client.get(
-                            f"{self.BASE_URL}/shipments/{shipping_id}",
-                            headers=self._headers(),
-                        )
+                        r = await self._get(client, f"{self.BASE_URL}/shipments/{shipping_id}")
                         if r.status_code == 200:
                             shipment_info = r.json()
                     except Exception:

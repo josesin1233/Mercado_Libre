@@ -1,7 +1,6 @@
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 from datetime import datetime, timezone
-from collections import defaultdict
 from app.meli_client import meli
 from app.ui import base_layout
 
@@ -19,13 +18,6 @@ def _parse_date(date_str: str | None) -> datetime | None:
         return None
 
 
-def _format_date(date_str: str | None) -> str:
-    dt = _parse_date(date_str)
-    if not dt:
-        return "—"
-    return dt.strftime("%d/%m/%Y %H:%M")
-
-
 def _format_date_short(date_str: str | None) -> str:
     dt = _parse_date(date_str)
     if not dt:
@@ -34,30 +26,71 @@ def _format_date_short(date_str: str | None) -> str:
 
 
 def _get_deadline(shipment: dict | None) -> str | None:
-    """Extrae la fecha límite de despacho del shipment."""
+    """Busca la fecha límite de despacho probando varias rutas del API de ML."""
     if not shipment:
         return None
-    return (
+    # Ruta 1: shipping_option.estimated_handling_limit.date
+    d = (
         shipment.get("shipping_option", {})
         .get("estimated_handling_limit", {})
         .get("date")
     )
+    if d:
+        return d
+    # Ruta 2: estimated_handling_limit directa
+    ehl = shipment.get("estimated_handling_limit")
+    if isinstance(ehl, dict):
+        d = ehl.get("date")
+        if d:
+            return d
+    elif isinstance(ehl, str):
+        return ehl
+    # Ruta 3: date_first_printed como referencia si no hay deadline
+    return None
 
 
 def _get_delivery_date(shipment: dict | None) -> str | None:
-    """Extrae la fecha estimada de entrega."""
+    """Busca la fecha estimada de entrega."""
     if not shipment:
         return None
-    return (
+    d = (
         shipment.get("shipping_option", {})
         .get("estimated_delivery_time", {})
         .get("date")
     )
+    if d:
+        return d
+    edt = shipment.get("estimated_delivery_time")
+    if isinstance(edt, dict):
+        return edt.get("date")
+    elif isinstance(edt, str):
+        return edt
+    # Ruta 3: estimated_delivery_final
+    d = (
+        shipment.get("shipping_option", {})
+        .get("estimated_delivery_final", {})
+        .get("date")
+    )
+    return d
 
 
-def _classify_status(shipment: dict | None) -> tuple[str, str, str]:
+def _get_ship_by_date(shipment: dict | None) -> str | None:
+    """Obtiene la mejor fecha disponible para 'cuándo debería enviarse'.
+    Prioriza: handling_limit > date_first_printed > last_updated."""
+    deadline = _get_deadline(shipment)
+    if deadline:
+        return deadline
+    delivery = _get_delivery_date(shipment)
+    if delivery:
+        return delivery
+    if not shipment:
+        return None
+    return shipment.get("date_created")
+
+
+def _classify_status(shipment: dict | None, deadline_str: str | None) -> tuple[str, str, str]:
     """
-    Clasifica el estado real del envío cruzando status + substatus + deadline.
+    Clasifica el estado real cruzando status + substatus + deadline.
     Retorna (label, badge_class, category).
     Categories: 'delayed', 'ready', 'shipped', 'pending', 'other'
     """
@@ -67,14 +100,12 @@ def _classify_status(shipment: dict | None) -> tuple[str, str, str]:
     status = shipment.get("status", "")
     substatus = shipment.get("substatus") or ""
 
-    # Si ya está entregado o cancelado, no debería llegar aquí pero por si acaso
     if status == "delivered":
         return "Entregado", "badge-success", "other"
     if status == "cancelled":
         return "Cancelado", "badge-neutral", "other"
 
-    # Verificar si está demorado: deadline pasado y aún no está shipped
-    deadline_str = _get_deadline(shipment)
+    # ¿Está demorado? deadline pasado y no shipped
     is_delayed = False
     if deadline_str and status in ("ready_to_ship", "pending"):
         deadline_dt = _parse_date(deadline_str)
@@ -82,52 +113,42 @@ def _classify_status(shipment: dict | None) -> tuple[str, str, str]:
             is_delayed = True
 
     if status == "shipped":
-        # Substatuses de shipped
         sub_labels = {
             "in_hub": "En centro de distribución",
             "waiting_for_withdrawal": "Esperando retiro",
             "out_for_delivery": "En reparto",
             "soon_deliver": "Por entregar",
-            "delivered": "Entregado",
         }
-        label = sub_labels.get(substatus, "En camino")
-        return label, "badge-success", "shipped"
+        return sub_labels.get(substatus, "En camino"), "badge-success", "shipped"
 
     if status == "ready_to_ship":
         if is_delayed:
             sub_labels = {
                 "ready_to_print": "DEMORADO - Imprimir etiqueta",
                 "printed": "DEMORADO - Despachar",
-                "ready_for_pkl": "DEMORADO - Preparar",
-                "invoice_pending": "DEMORADO - Factura pendiente",
             }
-            label = sub_labels.get(substatus, "DEMORADO")
-            return label, "badge-danger", "delayed"
+            return sub_labels.get(substatus, "DEMORADO"), "badge-danger", "delayed"
         else:
             sub_labels = {
                 "ready_to_print": "Imprimir etiqueta",
                 "printed": "Etiqueta impresa",
-                "ready_for_pkl": "Preparar paquete",
-                "invoice_pending": "Factura pendiente",
             }
-            label = sub_labels.get(substatus, "Listo para enviar")
-            return label, "badge-accent", "ready"
+            return sub_labels.get(substatus, "Listo para enviar"), "badge-accent", "ready"
 
     if status == "pending":
         if is_delayed:
-            return "DEMORADO - Pendiente", "badge-danger", "delayed"
+            return "DEMORADO", "badge-danger", "delayed"
         return "Pendiente", "badge-warning", "pending"
 
     if status == "not_delivered":
         return "No entregado", "badge-danger", "delayed"
 
-    return f"{status} ({substatus})" if substatus else status, "badge-neutral", "other"
+    return f"{status}" + (f" ({substatus})" if substatus else ""), "badge-neutral", "other"
 
 
 def _tiempo_restante(deadline_str: str | None) -> tuple[str, str]:
-    """Retorna (texto, badge_class)."""
     if not deadline_str:
-        return "Sin fecha", "badge-neutral"
+        return "—", "badge-neutral"
     dt = _parse_date(deadline_str)
     if not dt:
         return "—", "badge-neutral"
@@ -136,35 +157,35 @@ def _tiempo_restante(deadline_str: str | None) -> tuple[str, str]:
     if hours < 0:
         abs_h = abs(int(hours))
         if abs_h >= 24:
-            return f"Hace {abs_h // 24}d", "badge-danger"
+            return f"Hace {abs_h // 24}d {abs_h % 24}h", "badge-danger"
         return f"Hace {abs_h}h", "badge-danger"
     elif hours < 24:
         return f"{int(hours)}h", "badge-warning"
     elif hours < 48:
-        return f"{int(hours)}h", "badge-warning"
+        return f"1d {int(hours - 24)}h", "badge-success"
     else:
         return f"{int(hours / 24)}d", "badge-success"
 
 
-def _enrich_item(item: dict) -> dict:
-    """Enriquece un item con datos procesados."""
+def _enrich_order(item: dict) -> dict:
+    """Enriquece un pedido con datos procesados."""
     order = item["order"]
     shipment = item.get("shipment")
 
     deadline_str = _get_deadline(shipment)
+    ship_by = _get_ship_by_date(shipment)
     delivery_str = _get_delivery_date(shipment)
-    status_label, status_cls, category = _classify_status(shipment)
+    status_label, status_cls, category = _classify_status(shipment, deadline_str)
     tiempo_text, tiempo_cls = _tiempo_restante(deadline_str)
 
     return {
-        **item,
         "order_id": order.get("id", "?"),
         "buyer": order.get("buyer", {}).get("nickname", "—"),
-        "buyer_id": order.get("buyer", {}).get("id"),
         "total": order.get("total_amount", 0),
         "currency": order.get("currency_id", "MXN"),
         "date_created": order.get("date_created", ""),
         "deadline_str": deadline_str,
+        "ship_by": ship_by,
         "delivery_str": delivery_str,
         "status_label": status_label,
         "status_cls": status_cls,
@@ -172,158 +193,272 @@ def _enrich_item(item: dict) -> dict:
         "tiempo_text": tiempo_text,
         "tiempo_cls": tiempo_cls,
         "logistic": shipment.get("logistic_type", "—") if shipment else "—",
-        "productos": [
+        "shipping_status_raw": shipment.get("status") if shipment else None,
+        "shipping_substatus_raw": shipment.get("substatus") if shipment else None,
+        "items": [
             {
                 "title": oi.get("item", {}).get("title", "?"),
                 "qty": oi.get("quantity", 1),
                 "sku": oi.get("item", {}).get("seller_sku", ""),
+                "unit_price": oi.get("unit_price", 0),
             }
             for oi in order.get("order_items", [])
         ],
     }
 
 
-# ── HTML builders ──
-
-def _build_product_html(productos: list[dict]) -> str:
+def _build_product_html(items: list[dict]) -> str:
     html = ""
-    for p in productos:
-        sku = f' <span style="color:var(--text-muted);font-size:11px;">({p["sku"]})</span>' if p["sku"] else ""
-        html += f'<div>{p["title"]} <strong>x{p["qty"]}</strong>{sku}</div>'
+    for p in items:
+        sku = f' <span class="sku">SKU: {p["sku"]}</span>' if p["sku"] else ""
+        html += f'<div class="product-line">{p["title"]} <strong>x{p["qty"]}</strong>{sku}</div>'
     return html
 
 
-def _build_row(item: dict, is_delayed: bool) -> str:
-    row_style = ' style="background:var(--danger-bg);"' if is_delayed else ""
-    productos = _build_product_html(item["productos"])
+# ── Sort helpers ──
 
-    return f"""<tr{row_style}>
-        <td>
-            <strong>#{item["order_id"]}</strong><br>
-            <span style="font-size:12px;color:var(--text-muted);">{_format_date_short(item["date_created"])}</span>
-        </td>
-        <td>{item["buyer"]}</td>
-        <td style="max-width:280px;font-size:13px;">{productos}</td>
-        <td><strong>${item["total"]:,.2f}</strong></td>
-        <td><span class="badge {item["status_cls"]}">{item["status_label"]}</span></td>
-        <td>{_format_date_short(item["deadline_str"])}</td>
-        <td><span class="badge {item["tiempo_cls"]}">{item["tiempo_text"]}</span></td>
-    </tr>"""
+CATEGORY_ORDER = {"delayed": 0, "ready": 1, "pending": 2, "shipped": 3, "other": 4}
 
 
-def _build_card(item: dict, is_delayed: bool) -> str:
-    border = "border-left:4px solid var(--danger);" if is_delayed else ""
-    bg = "background:var(--danger-bg);" if is_delayed else ""
-    productos = _build_product_html(item["productos"])
+def _sort_key(order: dict) -> tuple:
+    """Ordena: categoría primero (delayed=0), luego por deadline más cercano."""
+    cat = CATEGORY_ORDER.get(order["category"], 99)
+    deadline_dt = _parse_date(order["deadline_str"])
+    if not deadline_dt:
+        deadline_dt = _parse_date(order["date_created"]) or datetime.max.replace(tzinfo=timezone.utc)
+    return (cat, deadline_dt)
 
-    return f"""<div class="order-card" style="{border}{bg}">
-        <div class="order-card-header">
-            <div>
-                <div class="order-id">#{item["order_id"]}</div>
-                <div class="order-date">{_format_date_short(item["date_created"])} &middot; {item["buyer"]}</div>
+
+# ── Page builders ──
+
+def _build_order_card_html(o: dict) -> str:
+    """Card de un pedido para desktop y mobile."""
+    is_delayed = o["category"] == "delayed"
+
+    # Estilos según estado
+    if is_delayed:
+        border_color = "var(--danger)"
+        bg = "var(--danger-bg)"
+        header_bg = "#fecaca"
+    elif o["category"] == "ready":
+        border_color = "var(--accent)"
+        bg = "var(--surface)"
+        header_bg = "var(--accent-soft)"
+    elif o["category"] == "shipped":
+        border_color = "var(--success)"
+        bg = "var(--surface)"
+        header_bg = "var(--success-bg)"
+    else:
+        border_color = "var(--warning)"
+        bg = "var(--surface)"
+        header_bg = "var(--warning-bg)"
+
+    items_html = _build_product_html(o["items"])
+    total_items = sum(i["qty"] for i in o["items"])
+
+    deadline_display = _format_date_short(o["deadline_str"]) if o["deadline_str"] else "Sin fecha asignada"
+
+    pulse_class = " pulse" if is_delayed else ""
+
+    return f"""
+    <div class="pedido-card" style="border-left:4px solid {border_color};background:{bg};">
+        <div class="pedido-header" style="background:{header_bg};">
+            <div class="pedido-title">
+                <strong>Pedido #{o["order_id"]}</strong>
+                <span style="color:var(--text-secondary);font-size:13px;">&middot; {o["buyer"]}</span>
             </div>
-            <span class="badge {item["tiempo_cls"]}">{item["tiempo_text"]}</span>
+            <div class="pedido-badges">
+                <span class="badge {o["status_cls"]}{pulse_class}">{o["status_label"]}</span>
+                <span class="badge {o["tiempo_cls"]}">{o["tiempo_text"]}</span>
+            </div>
         </div>
-        <div class="order-card-products">{productos}</div>
-        <div class="order-card-body">
-            <div class="order-card-row">
-                <span class="label">Monto</span>
-                <strong>${item["total"]:,.2f} {item["currency"]}</strong>
+
+        <div class="pedido-body">
+            <div class="pedido-items">
+                {items_html}
             </div>
-            <div class="order-card-row">
-                <span class="label">Estado</span>
-                <span class="badge {item["status_cls"]}">{item["status_label"]}</span>
-            </div>
-            <div class="order-card-row">
-                <span class="label">Fecha envío</span>
-                <span>{_format_date_short(item["deadline_str"])}</span>
-            </div>
-            <div class="order-card-row">
-                <span class="label">Tipo</span>
-                <span>{item["logistic"]}</span>
+
+            <div class="pedido-meta">
+                <div class="meta-item">
+                    <span class="meta-label">Fecha de venta</span>
+                    <span class="meta-value">{_format_date_short(o["date_created"])}</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">Enviar antes de</span>
+                    <span class="meta-value" style="{"color:var(--danger);font-weight:700;" if is_delayed else ""}">{deadline_display}</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">Artículos</span>
+                    <span class="meta-value">{total_items}</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">Total</span>
+                    <span class="meta-value"><strong>${o["total"]:,.2f} {o["currency"]}</strong></span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">Tipo envío</span>
+                    <span class="meta-value">{o["logistic"]}</span>
+                </div>
             </div>
         </div>
     </div>"""
 
 
-def _build_section(title: str, icon: str, items: list[dict], section_cls: str) -> str:
-    """Construye una sección completa (tabla desktop + cards mobile)."""
-    if not items:
+def _build_section(title: str, icon: str, orders: list[dict], section_id: str) -> str:
+    if not orders:
         return ""
 
-    is_delayed = section_cls == "delayed"
-
-    # Agrupar por comprador
-    groups: dict[str, list[dict]] = defaultdict(list)
-    for item in items:
-        groups[item["buyer"]].append(item)
-
-    # Ordenar grupos por deadline más temprano
-    def group_sort_key(buyer_items: tuple[str, list[dict]]) -> datetime:
-        deadlines = [_parse_date(i["deadline_str"]) for i in buyer_items[1] if i["deadline_str"]]
-        return min(deadlines) if deadlines else datetime.max.replace(tzinfo=timezone.utc)
-
-    sorted_groups = sorted(groups.items(), key=group_sort_key)
-
-    rows = ""
-    cards = ""
-
-    for buyer, buyer_items in sorted_groups:
-        is_group = len(buyer_items) > 1
-
-        if is_group:
-            group_total = sum(i["total"] for i in buyer_items)
-            group_count = len(buyer_items)
-            rows += f"""<tr style="background:var(--accent-soft);">
-                <td colspan="7" style="padding:8px 20px;font-size:13px;">
-                    <strong>{buyer}</strong> &mdash; {group_count} pedidos &mdash; Total: <strong>${group_total:,.2f}</strong>
-                </td>
-            </tr>"""
-            cards += f"""<div style="background:var(--accent-soft);padding:10px 16px;border-radius:var(--radius-sm);margin:16px 0 4px 0;font-size:13px;">
-                <strong>{buyer}</strong> &mdash; {group_count} pedidos &mdash; ${group_total:,.2f}
-            </div>"""
-
-        for item in buyer_items:
-            rows += _build_row(item, is_delayed)
-            cards += _build_card(item, is_delayed)
-
+    is_delayed = section_id == "delayed"
     border_color = {
         "delayed": "var(--danger)",
         "ready": "var(--accent)",
         "shipped": "var(--success)",
         "pending": "var(--warning)",
-    }.get(section_cls, "var(--border)")
+    }.get(section_id, "var(--border)")
 
-    count = len(items)
+    cards_html = "".join(_build_order_card_html(o) for o in orders)
 
     return f"""
-    <div class="table-wrapper" style="margin-bottom:24px;border-top:3px solid {border_color};">
-        <div class="table-header">
-            <h2>{icon} {title} <span style="font-weight:400;color:var(--text-muted);font-size:14px;">({count})</span></h2>
+    <div class="section" style="border-top:3px solid {border_color};">
+        <div class="section-header">
+            <h2>{icon} {title} <span class="section-count">({len(orders)})</span></h2>
         </div>
-        <div class="table-desktop">
-            <table>
-                <thead><tr>
-                    <th>Orden</th>
-                    <th>Comprador</th>
-                    <th>Productos</th>
-                    <th>Monto</th>
-                    <th>Estado</th>
-                    <th>Fecha envío</th>
-                    <th>Plazo</th>
-                </tr></thead>
-                <tbody>{rows}</tbody>
-            </table>
-        </div>
-        <div class="order-cards" style="padding:12px;">{cards}</div>
+        {cards_html}
     </div>"""
+
+
+# ── Extra CSS for pedido cards ──
+
+VENTAS_CSS = """
+<style>
+    .section {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        margin-bottom: 24px;
+    }
+    .section-header {
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--border);
+    }
+    .section-header h2 {
+        font-size: 16px;
+        font-weight: 600;
+    }
+    .section-count {
+        font-weight: 400;
+        color: var(--text-muted);
+        font-size: 14px;
+    }
+
+    .pedido-card {
+        border-bottom: 1px solid var(--border);
+        transition: background 0.1s ease;
+    }
+    .pedido-card:last-child {
+        border-bottom: none;
+    }
+
+    .pedido-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 20px;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .pedido-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        font-size: 15px;
+    }
+    .pedido-badges {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+
+    .pedido-body {
+        padding: 12px 20px 16px;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 20px;
+    }
+
+    .pedido-items {
+        font-size: 14px;
+    }
+    .product-line {
+        padding: 3px 0;
+    }
+    .product-line .sku {
+        color: var(--text-muted);
+        font-size: 11px;
+    }
+
+    .pedido-meta {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px 24px;
+        font-size: 13px;
+        align-content: start;
+    }
+    .meta-item {
+        display: flex;
+        flex-direction: column;
+    }
+    .meta-label {
+        color: var(--text-muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+    }
+    .meta-value {
+        color: var(--text);
+        margin-top: 1px;
+    }
+
+    /* Pulse animation for delayed badges */
+    .badge.pulse {
+        animation: badge-pulse 2s ease-in-out infinite;
+    }
+    @keyframes badge-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+    }
+
+    @media (max-width: 768px) {
+        .pedido-header {
+            padding: 10px 14px;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        .pedido-body {
+            padding: 10px 14px 14px;
+            grid-template-columns: 1fr;
+            gap: 12px;
+        }
+        .pedido-meta {
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        .section-header {
+            padding: 12px 14px;
+        }
+    }
+</style>
+"""
 
 
 # ── Routes ──
 
 @router.get("/", response_class=HTMLResponse)
 async def ventas_pendientes():
-    """Muestra las ventas pendientes separadas por estado."""
+    """Muestra los pedidos pendientes organizados por prioridad."""
     try:
         data = await meli.get_pending_shipments()
     except Exception as e:
@@ -336,28 +471,32 @@ async def ventas_pendientes():
             </div>"""
         return HTMLResponse(content=base_layout("Error", error_content, active="ventas"), status_code=500)
 
-    # Filtrar entregados/cancelados y enriquecer
-    items = []
+    # Enriquecer y filtrar
+    orders = []
     for item in data:
         shipment = item.get("shipment")
         if shipment and shipment.get("status") in ("delivered", "cancelled"):
             continue
-        items.append(_enrich_item(item))
+        orders.append(_enrich_order(item))
+
+    # Ordenar por prioridad y luego deadline
+    orders.sort(key=_sort_key)
 
     # Separar por categoría
-    delayed = [i for i in items if i["category"] == "delayed"]
-    ready = [i for i in items if i["category"] == "ready"]
-    shipped = [i for i in items if i["category"] == "shipped"]
-    pending = [i for i in items if i["category"] == "pending"]
+    delayed = [o for o in orders if o["category"] == "delayed"]
+    ready = [o for o in orders if o["category"] == "ready"]
+    pending = [o for o in orders if o["category"] == "pending"]
+    shipped = [o for o in orders if o["category"] == "shipped"]
 
-    total_amount = sum(i["total"] for i in items)
+    total_amount = sum(o["total"] for o in orders)
 
-    # Stats
     content = f"""
+        {VENTAS_CSS}
+
         <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:8px;">
             <div>
                 <h1 class="page-title">Ventas Pendientes</h1>
-                <p class="page-subtitle">Ordenadas por fecha de envío, agrupadas por comprador</p>
+                <p class="page-subtitle">Pedidos organizados por prioridad de envío</p>
             </div>
             <a href="/ventas/" class="btn" onclick="this.innerHTML='Cargando...';this.style.pointerEvents='none';">Actualizar</a>
         </div>
@@ -366,7 +505,7 @@ async def ventas_pendientes():
             <div class="stat-card danger">
                 <div class="stat-label">Demorados</div>
                 <div class="stat-value">{len(delayed)}</div>
-                <div class="stat-detail">Requieren acción inmediata</div>
+                <div class="stat-detail">Acción inmediata</div>
             </div>
             <div class="stat-card accent">
                 <div class="stat-label">Por enviar</div>
@@ -381,7 +520,7 @@ async def ventas_pendientes():
             <div class="stat-card">
                 <div class="stat-label">Venta total</div>
                 <div class="stat-value">${total_amount:,.0f}</div>
-                <div class="stat-detail">MXN en {len(items)} orden{"es" if len(items) != 1 else ""}</div>
+                <div class="stat-detail">MXN en {len(orders)} pedido{"s" if len(orders) != 1 else ""}</div>
             </div>
         </div>
 
@@ -390,14 +529,14 @@ async def ventas_pendientes():
         {_build_section("Pendientes", "⏳", pending, "pending")}
         {_build_section("En camino", "🚚", shipped, "shipped")}
 
-        {"" if items else '<div class="empty-state"><div class="icon">🎉</div><p>No hay ventas pendientes</p></div>'}
+        {"" if orders else '<div class="empty-state"><div class="icon">🎉</div><p>No hay ventas pendientes</p></div>'}
     """
     return HTMLResponse(content=base_layout("Ventas Pendientes", content, active="ventas"))
 
 
 @router.get("/debug")
 async def ventas_debug():
-    """Muestra datos crudos de ML para debugging."""
+    """Muestra el shipment COMPLETO de ML para ver todas las fechas disponibles."""
     try:
         data = await meli.get_pending_shipments()
     except Exception as e:
@@ -407,23 +546,36 @@ async def ventas_debug():
     for item in data:
         shipment = item.get("shipment")
         order = item["order"]
+
+        # Extraer todas las fechas posibles del shipment
+        fechas = {}
+        if shipment:
+            fechas = {
+                "shipping_option": shipment.get("shipping_option"),
+                "date_created": shipment.get("date_created"),
+                "last_updated": shipment.get("last_updated"),
+                "date_first_printed": shipment.get("date_first_printed"),
+                "estimated_handling_limit": shipment.get("estimated_handling_limit"),
+                "estimated_delivery_time": shipment.get("estimated_delivery_time"),
+            }
+
         results.append({
             "order_id": order.get("id"),
             "order_status": order.get("status"),
             "buyer": order.get("buyer", {}).get("nickname"),
+            "items_count": len(order.get("order_items", [])),
             "shipping_status": shipment.get("status") if shipment else None,
             "shipping_substatus": shipment.get("substatus") if shipment else None,
             "logistic_type": shipment.get("logistic_type") if shipment else None,
-            "handling_limit": _get_deadline(shipment),
-            "delivery_date": _get_delivery_date(shipment),
-            "date_created": order.get("date_created"),
+            "fechas_encontradas": fechas,
+            "_shipment_keys": list(shipment.keys()) if shipment else [],
         })
     return {"total": len(results), "orders": results}
 
 
 @router.get("/api")
 async def ventas_api():
-    """Devuelve las ventas pendientes como JSON."""
+    """JSON de ventas pendientes."""
     try:
         data = await meli.get_pending_shipments()
     except Exception as e:
@@ -434,19 +586,19 @@ async def ventas_api():
         shipment = item.get("shipment")
         if shipment and shipment.get("status") in ("delivered", "cancelled"):
             continue
-        enriched = _enrich_item(item)
+        o = _enrich_order(item)
         pending.append({
-            "order_id": enriched["order_id"],
-            "buyer": enriched["buyer"],
-            "productos": enriched["productos"],
-            "total": enriched["total"],
-            "currency": enriched["currency"],
-            "status": enriched["status_label"],
-            "category": enriched["category"],
-            "deadline": enriched["deadline_str"],
-            "delivery_date": enriched["delivery_str"],
-            "logistic_type": enriched["logistic"],
-            "date_created": enriched["date_created"],
+            "order_id": o["order_id"],
+            "buyer": o["buyer"],
+            "items": o["items"],
+            "total": o["total"],
+            "currency": o["currency"],
+            "status": o["status_label"],
+            "category": o["category"],
+            "deadline": o["deadline_str"],
+            "delivery_date": o["delivery_str"],
+            "logistic_type": o["logistic"],
+            "date_created": o["date_created"],
         })
 
     return {"total_pending": len(pending), "orders": pending}

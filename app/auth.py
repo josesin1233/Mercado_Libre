@@ -35,6 +35,7 @@ def login():
         f"&redirect_uri={settings.REDIRECT_URI}"
         f"&code_challenge={code_challenge}"
         f"&code_challenge_method=S256"
+        f"&scope=offline_access+read+write"
     )
     return RedirectResponse(url=auth_url)
 
