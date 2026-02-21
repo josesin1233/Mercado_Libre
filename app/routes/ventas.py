@@ -149,7 +149,7 @@ def _classify_status(shipment: dict | None, deadline_str: str | None) -> tuple[s
         return "No entregado", "badge-danger", "delayed"
 
     label = status + (f" ({substatus})" if substatus else "")
-    return label, "badge-neutral", "other"
+    return label, "badge-neutral", "pending"
 
 
 def _tiempo_restante(deadline_str: str | None) -> tuple[str, str]:
@@ -384,6 +384,9 @@ async def ventas_pendientes():
     # Enriquecer y filtrar entregados/cancelados
     orders = []
     for item in data:
+        order = item["order"]
+        if order.get("status") in ("cancelled",):
+            continue
         shipment = item.get("shipment")
         if shipment and shipment.get("status") in ("delivered", "cancelled"):
             continue

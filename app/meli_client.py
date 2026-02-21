@@ -38,11 +38,10 @@ class MeliClient:
         order = await self.get_order(order_id)
         return order.get("order_items", [])
 
-    async def get_recent_orders(self, order_status: str = "paid", limit: int = 50) -> dict:
-        """Busca órdenes del vendedor."""
+    async def get_recent_orders(self, limit: int = 50) -> dict:
+        """Busca órdenes recientes del vendedor sin filtrar por status."""
         params = {
             "seller": settings.USER_ID,
-            "order.status": order_status,
             "sort": "date_desc",
             "limit": limit,
         }
