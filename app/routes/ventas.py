@@ -382,7 +382,7 @@ async def ventas_pendientes():
         return HTMLResponse(content=base_layout("Error — Ventas", error_content, active="ventas"), status_code=500)
 
     # Enriquecer y filtrar entregados/cancelados
-    orders = []
+    raw_orders = []
     for item in data:
         order = item["order"]
         if order.get("status") in ("cancelled",):
@@ -390,7 +390,30 @@ async def ventas_pendientes():
         shipment = item.get("shipment")
         if shipment and shipment.get("status") in ("delivered", "cancelled"):
             continue
-        orders.append(_enrich_order(item))
+        raw_orders.append(_enrich_order(item))
+
+    # Agrupar por shipment_id (ML crea un order_id por artículo pero un solo envío)
+    CAT_PRIORITY = {"delayed": 0, "ready": 1, "pending": 2, "shipped": 3, "other": 4}
+    seen_shipments: dict = {}
+    orders = []
+    for o in raw_orders:
+        sid = o.get("shipment_id")
+        if sid and sid in seen_shipments:
+            # Combinar items y total en el primer representante del grupo
+            existing = seen_shipments[sid]
+            existing["items"].extend(o["items"])
+            existing["total"] += o["total"]
+            # Mantener la categoría más urgente
+            if CAT_PRIORITY.get(o["category"], 99) < CAT_PRIORITY.get(existing["category"], 99):
+                existing["category"] = o["category"]
+                existing["status_label"] = o["status_label"]
+                existing["status_cls"] = o["status_cls"]
+                existing["tiempo_text"] = o["tiempo_text"]
+                existing["tiempo_cls"] = o["tiempo_cls"]
+        else:
+            if sid:
+                seen_shipments[sid] = o
+            orders.append(o)
 
     orders.sort(key=_sort_key)
 
