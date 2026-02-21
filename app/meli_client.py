@@ -38,27 +38,36 @@ class MeliClient:
         order = await self.get_order(order_id)
         return order.get("order_items", [])
 
-    async def get_recent_orders(self, limit: int = 50) -> dict:
-        """Busca órdenes recientes del vendedor sin filtrar por status."""
-        params = {
-            "seller": settings.USER_ID,
-            "sort": "date_desc",
-            "limit": limit,
-        }
+    async def get_recent_orders(self, limit: int = 51) -> dict:
+        """Busca órdenes pagadas del vendedor con paginación (2 páginas = hasta 102 órdenes)."""
+        all_results = []
         async with httpx.AsyncClient() as client:
-            r = await self._get(client, f"{self.BASE_URL}/orders/search", params=params)
-            if not r.is_success:
-                body = ""
-                try:
-                    body = r.json()
-                except Exception:
-                    body = r.text
-                raise httpx.HTTPStatusError(
-                    f"ML API {r.status_code}: {body}",
-                    request=r.request,
-                    response=r,
-                )
-            return r.json()
+            for offset in (0, limit):
+                params = {
+                    "seller": settings.USER_ID,
+                    "order.status": "paid",
+                    "sort": "date_desc",
+                    "limit": limit,
+                    "offset": offset,
+                }
+                r = await self._get(client, f"{self.BASE_URL}/orders/search", params=params)
+                if not r.is_success:
+                    body = ""
+                    try:
+                        body = r.json()
+                    except Exception:
+                        body = r.text
+                    raise httpx.HTTPStatusError(
+                        f"ML API {r.status_code}: {body}",
+                        request=r.request,
+                        response=r,
+                    )
+                data = r.json()
+                results = data.get("results", [])
+                all_results.extend(results)
+                if len(results) < limit:
+                    break
+        return {"results": all_results}
 
     async def get_items_thumbnails(self, item_ids: list[str]) -> dict[str, str]:
         """Obtiene thumbnails de múltiples items en grupos de 20."""
