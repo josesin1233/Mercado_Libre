@@ -38,7 +38,7 @@ class MeliClient:
         order = await self.get_order(order_id)
         return order.get("order_items", [])
 
-    async def get_recent_orders(self, order_status: str = "paid", limit: int = 100) -> dict:
+    async def get_recent_orders(self, order_status: str = "paid", limit: int = 50) -> dict:
         """Busca órdenes del vendedor."""
         params = {
             "seller": settings.USER_ID,
@@ -48,7 +48,17 @@ class MeliClient:
         }
         async with httpx.AsyncClient() as client:
             r = await self._get(client, f"{self.BASE_URL}/orders/search", params=params)
-            r.raise_for_status()
+            if not r.is_success:
+                body = ""
+                try:
+                    body = r.json()
+                except Exception:
+                    body = r.text
+                raise httpx.HTTPStatusError(
+                    f"ML API {r.status_code}: {body}",
+                    request=r.request,
+                    response=r,
+                )
             return r.json()
 
     async def get_items_thumbnails(self, item_ids: list[str]) -> dict[str, str]:
