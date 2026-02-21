@@ -98,7 +98,7 @@ class MeliClient:
 
     async def get_pending_shipments(self) -> list[dict]:
         """Obtiene las 100 órdenes más recientes pagadas."""
-        data = await self.get_recent_orders(limit=100)
+        data = await self.get_recent_orders(limit=50)
         orders = data.get("results", [])
 
         enriched = []
