@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from fastapi.responses import HTMLResponse, Response, JSONResponse
+from fastapi.responses import HTMLResponse, Response, JSONResponse, RedirectResponse
 from datetime import datetime, timezone
 from app.meli_client import meli
 from app.ui import base_layout
@@ -647,7 +647,11 @@ async def get_etiqueta(shipment_id: str):
         return JSONResponse({"error": "shipment_id inválido"}, status_code=400)
     pdf = await meli.get_label_pdf(shipment_id)
     if not pdf:
-        return JSONResponse({"error": "No se pudo obtener la etiqueta"}, status_code=404)
+        # Fallback: redirige al sitio de ML para imprimir la etiqueta
+        return RedirectResponse(
+            url=f"https://www.mercadolibre.com.mx/envios/{shipment_id}/ver_etiqueta",
+            status_code=302,
+        )
     return Response(
         content=pdf,
         media_type="application/pdf",

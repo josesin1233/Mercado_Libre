@@ -138,23 +138,39 @@ class MeliClient:
         return result
 
     async def get_label_pdf(self, shipment_id: str) -> bytes | None:
-        """Obtiene la etiqueta de envío en PDF desde la API de ML."""
-        async with httpx.AsyncClient() as client:
-            r = await self._get(
-                client,
-                f"{self.BASE_URL}/shipments/{shipment_id}/labels",
-                params={"response_type": "pdf2"},
-            )
-            if r.status_code == 200:
-                return r.content
-            try:
-                body = r.json()
-            except Exception:
-                body = r.text
-            logger.warning(
-                "get_label_pdf: shipment %s → HTTP %s: %s",
-                shipment_id, r.status_code, body,
-            )
+        """
+        Obtiene la etiqueta de envío en PDF desde la API de ML.
+        Prueba response_type=pdf2 y luego pdf como fallback.
+        Sigue redirects automáticamente.
+        """
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            for rtype in ("pdf2", "pdf"):
+                try:
+                    r = await self._get(
+                        client,
+                        f"{self.BASE_URL}/shipments/{shipment_id}/labels",
+                        params={"response_type": rtype, "shipment_ids": shipment_id},
+                    )
+                    if r.status_code == 200:
+                        ct = r.headers.get("content-type", "")
+                        if "pdf" in ct or len(r.content) > 1000:
+                            logger.info(
+                                "get_label_pdf: shipment %s OK con response_type=%s (%d bytes)",
+                                shipment_id, rtype, len(r.content),
+                            )
+                            return r.content
+                    try:
+                        body = r.json()
+                    except Exception:
+                        body = r.text[:300]
+                    logger.warning(
+                        "get_label_pdf: shipment %s response_type=%s → HTTP %s ct=%s body=%s",
+                        shipment_id, rtype, r.status_code,
+                        r.headers.get("content-type"), body,
+                    )
+                except Exception as exc:
+                    logger.warning("get_label_pdf: shipment %s response_type=%s excepción: %s",
+                                   shipment_id, rtype, exc)
         return None
 
     async def get_pending_shipments(self) -> list[dict]:
