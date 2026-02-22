@@ -133,5 +133,74 @@ app/meli_client.py
   - Bug thumbnail corregido (isinstance check)
 
 ================================================================
-COMPLETADO: 2026-02-20
+COMPLETADO FASE 2: 2026-02-20
+================================================================
+
+
+================================================================
+SESIÓN: 2026-02-21 — BUGS DE PRODUCCIÓN EN RAILWAY
+================================================================
+
+BUGS CORREGIDOS:
+-----------------------------------------
+[x] favicon.ico 404
+    - Agregado <link rel="icon"> con SVG inline en ui.py base_layout
+    - Sin archivos estáticos, sin rutas nuevas
+
+[x] Error 400 Bad Request en /orders/search
+    - Causa: limit=100 supera el máximo de ML (≤51)
+    - Fix: limit reducido a 51 en get_recent_orders y get_pending_shipments
+    - Extra: ahora captura el body del error de ML para mejor diagnóstico
+
+[x] Órdenes pendientes no aparecen en la página /ventas/
+    - Causa 1: filtro order.status=paid excluía órdenes en otros estados
+      → Eliminado (luego restaurado, ver abajo)
+    - Causa 2: _classify_status usaba category="other" como default
+      → Cambiado a "pending" para que no se pierdan silenciosamente
+    - Causa 3: filtro solo por shipment.status, no por order.status
+      → Añadido filtro de orden cancelada a nivel order
+
+[x] Órdenes más antiguas perdidas por límite de resultados
+    - Causa: con limit=51 y sort=date_desc, órdenes pendientes antiguas
+      quedaban fuera del resultado porque las entregadas recientes
+      ocupaban los slots
+    - Fix: paginación de 2 páginas (51+51=102 órdenes máximo)
+    - Restaurado order.status=paid para enfocarse en órdenes relevantes
+
+[x] Número y contenido de pedidos no coincide con ML website
+    - Causa: ML crea 1 order_id por artículo en compras de múltiples ítems
+      pero los muestra agrupados por shipment_id en su página
+    - Fix: agrupar raw_orders por shipment_id antes de mostrar
+      * Items y totales se combinan en una sola tarjeta
+      * Se mantiene la categoría más urgente del grupo
+      * Coincide exactamente con la vista de ML
+
+ESTADO ACTUAL (commits en main):
+-----------------------------------------
+  e719ece  fix: favicon SVG inline
+  d5dda4d  fix: captura body error ML + limit=50 default
+  2f72a33  fix: limit=50 en get_pending_shipments
+  256906a  fix: mostrar todas las órdenes sin filtro de status + default pending
+  79f2677  fix: paginación 2 páginas x 51 órdenes
+  b1eb2f4  fix: agrupar por shipment_id para coincidir con vista de ML
+
+PENDIENTE / PRÓXIMA SESIÓN:
+-----------------------------------------
+- Verificar que el número de pedidos ahora coincide con ML (13 pendientes)
+- Posibles mejoras de rendimiento: shipment fetches en paralelo (asyncio.gather)
+  en lugar de secuencial para acelerar la carga de /ventas/
+- Revisar dashboard.py: ¿también necesita grouping por shipment_id?
+- Evaluar si hay órdenes en estado "shipped" (en camino) que mostrar
+
+ARQUITECTURA ACTUAL:
+-----------------------------------------
+- Framework: FastAPI (NO Flask)
+- Deploy: Railway (auto-deploy desde GitHub main)
+- API: Mercado Libre MX (seller_id configurado en .env)
+- Paginación: 2 páginas x 51 órdenes = 102 órdenes pagadas
+- Agrupación: por shipment_id (como hace ML internamente)
+- UI: HTML generado en Python (sin templates, sin Jinja2)
+  * ui.py → base_layout(), GLOBAL_CSS, MODAL_HTML, MODAL_JS
+  * ventas.py → _build_order_card_html(), _build_section()
+
 ================================================================
