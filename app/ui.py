@@ -1160,7 +1160,7 @@ MODAL_JS = """
     function buildLabelBtn(o) {
         const okSub = ['ready_to_print','printed','handling_time_over'];
         if (o.shipment_id && okSub.includes(o.shipping_substatus_raw)) {
-            return `<a href="/ventas/etiqueta/${o.shipment_id}"
+            return `<a href="https://www.mercadolibre.com.mx/envios/${o.shipment_id}/ver_etiqueta"
                       target="_blank" class="btn btn-primary">
                       Imprimir etiqueta
                     </a>`;

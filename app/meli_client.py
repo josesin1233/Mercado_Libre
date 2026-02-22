@@ -137,47 +137,6 @@ class MeliClient:
                 result[(item_id, variation_id)] = main_thumb
         return result
 
-    async def get_label_pdf(self, shipment_id: str) -> bytes | None:
-        """
-        Obtiene la etiqueta de envío en PDF desde la API de ML.
-        Prueba 4 combinaciones de URL/response_type hasta encontrar la que funcione.
-        """
-        attempts = [
-            # (url, params)  — formato bulk sin ID en path (recomendado por ML)
-            (f"{self.BASE_URL}/shipments/labels",
-             {"response_type": "pdf2", "shipment_ids": shipment_id}),
-            (f"{self.BASE_URL}/shipments/labels",
-             {"response_type": "pdf",  "shipment_ids": shipment_id}),
-            # Formato con ID en path
-            (f"{self.BASE_URL}/shipments/{shipment_id}/labels",
-             {"response_type": "pdf2"}),
-            (f"{self.BASE_URL}/shipments/{shipment_id}/labels",
-             {"response_type": "pdf"}),
-        ]
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            for url, params in attempts:
-                try:
-                    r = await self._get(client, url, params=params)
-                    if r.status_code == 200:
-                        ct = r.headers.get("content-type", "")
-                        if "pdf" in ct or len(r.content) > 500:
-                            logger.info(
-                                "get_label_pdf: shipment %s OK — url=%s params=%s (%d bytes)",
-                                shipment_id, url, params, len(r.content),
-                            )
-                            return r.content
-                    try:
-                        body = r.json()
-                    except Exception:
-                        body = r.text[:200]
-                    logger.warning(
-                        "get_label_pdf: shipment %s → HTTP %s url=%s params=%s body=%s",
-                        shipment_id, r.status_code, url, params, body,
-                    )
-                except Exception as exc:
-                    logger.warning("get_label_pdf: shipment %s excepción url=%s: %s",
-                                   shipment_id, url, exc)
-        return None
 
     async def get_pending_shipments(self) -> list[dict]:
         """Obtiene las 100 órdenes más recientes pagadas."""

@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from fastapi.responses import HTMLResponse, Response, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from datetime import datetime, timezone
 from app.meli_client import meli
 from app.ui import base_layout
@@ -304,7 +304,7 @@ def _build_order_card_html(o: dict) -> str:
     ok_sub = ("ready_to_print", "printed", "handling_time_over")
     if o.get("shipment_id") and o.get("shipping_substatus_raw") in ok_sub:
         label_btn = (
-            f'<a href="/ventas/etiqueta/{o["shipment_id"]}"'
+            f'<a href="https://www.mercadolibre.com.mx/envios/{o["shipment_id"]}/ver_etiqueta"'
             f' target="_blank" class="btn-label" onclick="event.stopPropagation()">'
             f'Imprimir etiqueta</a>'
         )
@@ -642,20 +642,12 @@ async def ventas_envio_api(shipment_id: str):
 
 @router.get("/etiqueta/{shipment_id}")
 async def get_etiqueta(shipment_id: str):
-    """Descarga la etiqueta de envío en PDF desde ML."""
+    """Redirige a la página de etiqueta de ML (la API de labels requiere app de integrador)."""
     if not shipment_id.isdigit():
         return JSONResponse({"error": "shipment_id inválido"}, status_code=400)
-    pdf = await meli.get_label_pdf(shipment_id)
-    if not pdf:
-        # Fallback: redirige al sitio de ML para imprimir la etiqueta
-        return RedirectResponse(
-            url=f"https://www.mercadolibre.com.mx/envios/{shipment_id}/ver_etiqueta",
-            status_code=302,
-        )
-    return Response(
-        content=pdf,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="etiqueta-{shipment_id}.pdf"'},
+    return RedirectResponse(
+        url=f"https://www.mercadolibre.com.mx/envios/{shipment_id}/ver_etiqueta",
+        status_code=302,
     )
 
 

@@ -26,7 +26,7 @@ def _build_recent_card(o: dict) -> str:
     label_btn = ""
     if o.get("shipment_id") and o.get("shipping_substatus_raw") in ok_sub:
         label_btn = (
-            f'<a href="/ventas/etiqueta/{o["shipment_id"]}"'
+            f'<a href="https://www.mercadolibre.com.mx/envios/{o["shipment_id"]}/ver_etiqueta"'
             f' target="_blank" class="btn btn-sm" style="font-size:11px;"'
             f' onclick="event.stopPropagation()">Imprimir etiqueta</a>'
         )
