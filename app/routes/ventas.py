@@ -309,7 +309,8 @@ def _build_order_card_html(o: dict) -> str:
             f'Imprimir etiqueta</a>'
         )
 
-    shipment_id = o.get("shipment_id") or o["order_id"]
+    order_id = o["order_id"]
+    shipment_id = o.get("shipment_id") or order_id
 
     return f"""
     <div class="pedido-card" style="border-left:4px solid {border_color};"
