@@ -26,30 +26,20 @@ def _build_recent_card(o: dict) -> str:
     label_btn = ""
     if o.get("shipment_id") and o.get("shipping_substatus_raw") in ok_sub:
         label_btn = (
-            f'<a href="https://www.mercadolibre.com.mx/envios/{o["shipment_id"]}/ver_etiqueta"'
+            f'<a href="/ventas/etiqueta/{o["shipment_id"]}"'
             f' target="_blank" class="btn btn-sm" style="font-size:11px;"'
             f' onclick="event.stopPropagation()">Imprimir etiqueta</a>'
         )
 
-    # Thumbnail
-    main_thumb = next((i.get("thumbnail", "") for i in o["items"] if i.get("thumbnail")), "")
-    thumb_html = ""
-    if main_thumb:
-        thumb_html = (
-            f'<img src="{main_thumb}" style="'
-            'width:54px;height:54px;object-fit:contain;border-radius:8px;'
-            'border:1px solid var(--border);background:#fff;flex-shrink:0;" alt="">'
-        )
-
-    order_id = o["order_id"]
+    shipment_id = o.get("shipment_id") or o["order_id"]
 
     return f"""
     <div class="order-card" style="border-left:4px solid {border_color};"
-         onclick="openOrderModal({order_id!r})" role="button" tabindex="0"
-         onkeydown="if(event.key==='Enter')openOrderModal({order_id!r})">
+         onclick="openShipmentModal({shipment_id!r})" role="button" tabindex="0"
+         onkeydown="if(event.key==='Enter')openShipmentModal({shipment_id!r})">
         <div class="order-card-header">
             <div>
-                <div class="order-id">Pedido #{order_id}</div>
+                <div class="order-id">Pedido #{o["order_id"]}</div>
                 <div style="font-size:12px;color:var(--text-muted);">
                     {_format_date_short(o["date_created"])} &middot; {o["buyer"]}
                 </div>
@@ -60,15 +50,12 @@ def _build_recent_card(o: dict) -> str:
                 {label_btn}
             </div>
         </div>
-        <div style="display:flex;gap:12px;align-items:flex-start;">
-            <div style="flex:1;">
-                <div class="order-card-products">{productos}</div>
-                <div class="order-card-row">
-                    <span class="label">Total</span>
-                    <strong>${o["total"]:,.2f} {o["currency"]}</strong>
-                </div>
+        <div>
+            {productos}
+            <div class="order-card-row" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);">
+                <span class="label">Total</span>
+                <strong>${o["total"]:,.2f} {o["currency"]}</strong>
             </div>
-            {thumb_html}
         </div>
     </div>"""
 
@@ -121,7 +108,7 @@ async def dashboard():
         </div>"""
 
     n = len(orders)
-    empty_state = '<div class="empty-state"><span class="icon">📦</span><p>No hay ventas pendientes</p></div>'
+    empty_state = '<div class="empty-state"><p>No hay ventas pendientes</p></div>'
 
     content = f"""
         <div class="page-header">

@@ -187,6 +187,16 @@ def _tiempo_restante(deadline_str: str | None) -> tuple[str, str]:
 
 # ── Data enrichment ───────────────────────────────────────────────────────────
 
+def _extract_album(order_item: dict) -> str:
+    """Extrae el nombre del álbum desde variation_attributes del order_item."""
+    attrs = order_item.get("item", {}).get("variation_attributes") or []
+    for attr in attrs:
+        name = (attr.get("name") or "").lower()
+        if "lbum" in name or "versi" in name:
+            return attr.get("value_name") or ""
+    return ""
+
+
 def _enrich_order(item: dict) -> dict:
     """Enriquece un pedido con datos procesados para UI y API."""
     order = item["order"]
@@ -220,6 +230,7 @@ def _enrich_order(item: dict) -> dict:
         "items": [
             {
                 "title": oi.get("item", {}).get("title", "?"),
+                "album": _extract_album(oi),
                 "qty": oi.get("quantity", 1),
                 "sku": oi.get("item", {}).get("seller_sku", "") or "",
                 "unit_price": oi.get("unit_price", 0),
@@ -240,16 +251,21 @@ def _build_product_html(items: list[dict]) -> str:
             f'<div class="item-row-sku">SKU: {p["sku"]}</div>'
             if p.get("sku") else ""
         )
+        album_html = (
+            f'<div class="item-row-album">{p["album"]}</div>'
+            if p.get("album") else ""
+        )
         thumb_html = (
             f'<img src="{p["thumbnail"]}" class="item-row-thumb" alt="">'
             if p.get("thumbnail")
-            else '<div class="item-row-thumb-empty">📦</div>'
+            else '<div class="item-row-thumb-empty"></div>'
         )
         html += f"""
         <div class="item-row">
             {thumb_html}
             <div class="item-row-info">
                 <div class="item-row-title">{p["title"]}</div>
+                {album_html}
                 {sku_html}
             </div>
             <span class="qty">x{p["qty"]}</span>
@@ -290,15 +306,15 @@ def _build_order_card_html(o: dict) -> str:
         label_btn = (
             f'<a href="/ventas/etiqueta/{o["shipment_id"]}"'
             f' target="_blank" class="btn-label" onclick="event.stopPropagation()">'
-            f'🖨️ Imprimir etiqueta</a>'
+            f'Imprimir etiqueta</a>'
         )
 
-    order_id = o["order_id"]
+    shipment_id = o.get("shipment_id") or o["order_id"]
 
     return f"""
     <div class="pedido-card" style="border-left:4px solid {border_color};"
-         onclick="openOrderModal({order_id!r})" role="button" tabindex="0"
-         onkeydown="if(event.key==='Enter')openOrderModal({order_id!r})">
+         onclick="openShipmentModal({shipment_id!r})" role="button" tabindex="0"
+         onkeydown="if(event.key==='Enter')openShipmentModal({shipment_id!r})">
         <div class="pedido-header" style="background:{header_bg};">
             <div class="pedido-title">
                 <strong>#{order_id}</strong>
@@ -353,7 +369,7 @@ def _build_section(title: str, icon: str, orders: list[dict], section_id: str) -
     return f"""
     <div class="section" style="border-top:3px solid {border_color};">
         <div class="section-header">
-            <h2>{icon} {title} <span class="section-count">({len(orders)})</span></h2>
+            <h2>{title} <span class="section-count">({len(orders)})</span></h2>
         </div>
         {cards_html}
     </div>"""
@@ -472,12 +488,12 @@ async def ventas_pendientes():
             </div>
         </div>
 
-        {_build_section("Demorados", "🔴", delayed, "delayed")}
-        {_build_section("Listos para enviar", "📦", ready, "ready")}
-        {_build_section("Pendientes", "⏳", pending, "pending")}
-        {_build_section("En camino", "🚚", shipped, "shipped")}
+        {_build_section("Demorados", "", delayed, "delayed")}
+        {_build_section("Listos para enviar", "", ready, "ready")}
+        {_build_section("Pendientes", "", pending, "pending")}
+        {_build_section("En camino", "", shipped, "shipped")}
 
-        {"" if orders else '<div class="empty-state"><span class="icon">🎉</span><p>No hay ventas pendientes</p></div>'}
+        {"" if orders else '<div class="empty-state"><p>No hay ventas pendientes</p></div>'}
     """
     return HTMLResponse(content=base_layout("Ventas Pendientes", content, active="ventas"))
 
@@ -567,6 +583,60 @@ async def ventas_debug():
             "_shipment_keys": list(shipment.keys()) if shipment else [],
         })
     return {"total": len(results), "orders": results}
+
+
+@router.get("/api/envio/{shipment_id}")
+async def ventas_envio_api(shipment_id: str):
+    """
+    JSON de detalle de un envío agrupado por shipment_id — consumido por el modal.
+    Agrega todas las órdenes que comparten el mismo shipment_id para mostrar
+    items y total correctos en pedidos con múltiples cuadros.
+    """
+    if not shipment_id.isdigit():
+        return JSONResponse({"error": "shipment_id inválido"}, status_code=400)
+    try:
+        data = await meli.get_pending_shipments()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    # Juntar todas las órdenes que pertenecen a este shipment
+    matching = [
+        item for item in data
+        if str(item.get("shipment_id", "")) == shipment_id
+    ]
+
+    if not matching:
+        # Fallback: fetch directo del shipment y su primera orden
+        try:
+            shipment_data = await meli.get_shipment(shipment_id)
+            # Buscar órdenes asociadas al shipment
+            order_ids = []
+            for item in data:
+                if str(item.get("shipment_id", "")) == shipment_id:
+                    order_ids.append(str(item["order"].get("id", "")))
+            if not order_ids:
+                return JSONResponse({"error": "Envío no encontrado"}, status_code=404)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+
+    if len(matching) == 1:
+        enriched = _enrich_order(matching[0])
+        return JSONResponse(enriched)
+
+    # Combinar múltiples órdenes del mismo envío
+    CAT_PRIORITY = {"delayed": 0, "ready": 1, "pending": 2, "shipped": 3, "other": 4}
+    base = _enrich_order(matching[0])
+    for item in matching[1:]:
+        extra = _enrich_order(item)
+        base["items"].extend(extra["items"])
+        base["total"] += extra["total"]
+        if CAT_PRIORITY.get(extra["category"], 99) < CAT_PRIORITY.get(base["category"], 99):
+            base["category"] = extra["category"]
+            base["status_label"] = extra["status_label"]
+            base["status_cls"] = extra["status_cls"]
+            base["tiempo_text"] = extra["tiempo_text"]
+            base["tiempo_cls"] = extra["tiempo_cls"]
+    return JSONResponse(base)
 
 
 @router.get("/etiqueta/{shipment_id}")

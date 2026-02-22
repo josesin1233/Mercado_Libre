@@ -69,14 +69,29 @@ class MeliClient:
                     break
         return {"results": all_results}
 
-    async def get_items_thumbnails(self, item_ids: list[str]) -> dict[str, str]:
-        """Obtiene thumbnails de múltiples items en grupos de 20."""
-        if not item_ids:
+    async def get_items_thumbnails(
+        self,
+        item_variation_pairs: list[tuple[str, str | None]],
+    ) -> dict[tuple[str, str | None], str]:
+        """
+        Obtiene thumbnails para pares (item_id, variation_id).
+
+        Cuando se provee variation_id, busca la foto específica de esa variante
+        usando el campo variations[].picture_ids del listado. Si no encuentra
+        foto de variante, cae de vuelta al thumbnail del listado principal.
+
+        Retorna dict keyed por (item_id, variation_id) → URL del thumbnail.
+        """
+        if not item_variation_pairs:
             return {}
-        thumbnails = {}
+
+        unique_item_ids = list({p[0] for p in item_variation_pairs})
+        # item_id → (thumbnail, {variation_id: picture_url})
+        item_data: dict[str, tuple[str, dict[str, str]]] = {}
+
         async with httpx.AsyncClient() as client:
-            for i in range(0, len(item_ids), 20):
-                batch = item_ids[i:i + 20]
+            for i in range(0, len(unique_item_ids), 20):
+                batch = unique_item_ids[i:i + 20]
                 try:
                     r = await self._get(
                         client,
@@ -87,10 +102,40 @@ class MeliClient:
                         for entry in r.json():
                             if entry.get("code") == 200:
                                 body = entry.get("body", {})
-                                thumbnails[str(body.get("id", ""))] = body.get("thumbnail", "")
+                                iid = str(body.get("id", ""))
+                                main_thumb = body.get("thumbnail", "")
+                                pictures: list[dict] = body.get("pictures", [])
+                                # Construir mapa picture_id → url
+                                pic_url: dict[str, str] = {
+                                    p["id"]: p.get("url", p.get("secure_url", ""))
+                                    for p in pictures
+                                    if p.get("id")
+                                }
+                                # Variantes
+                                var_thumbs: dict[str, str] = {}
+                                for var in body.get("variations", []):
+                                    vid = str(var.get("id", ""))
+                                    if not vid:
+                                        continue
+                                    vpics = var.get("picture_ids", [])
+                                    url = ""
+                                    for vpid in vpics:
+                                        url = pic_url.get(str(vpid), "")
+                                        if url:
+                                            break
+                                    var_thumbs[vid] = url or main_thumb
+                                item_data[iid] = (main_thumb, var_thumbs)
                 except Exception as exc:
                     logger.warning("Error al obtener thumbnails batch %s: %s", batch, exc)
-        return thumbnails
+
+        result: dict[tuple[str, str | None], str] = {}
+        for item_id, variation_id in item_variation_pairs:
+            main_thumb, var_thumbs = item_data.get(item_id, ("", {}))
+            if variation_id and variation_id in var_thumbs:
+                result[(item_id, variation_id)] = var_thumbs[variation_id]
+            else:
+                result[(item_id, variation_id)] = main_thumb
+        return result
 
     async def get_label_pdf(self, shipment_id: str) -> bytes | None:
         """Obtiene la etiqueta de envío en PDF desde la API de ML."""
@@ -98,10 +143,18 @@ class MeliClient:
             r = await self._get(
                 client,
                 f"{self.BASE_URL}/shipments/{shipment_id}/labels",
-                params={"response_type": "pdf", "shipment_ids": shipment_id},
+                params={"response_type": "pdf2"},
             )
             if r.status_code == 200:
                 return r.content
+            try:
+                body = r.json()
+            except Exception:
+                body = r.text
+            logger.warning(
+                "get_label_pdf: shipment %s → HTTP %s: %s",
+                shipment_id, r.status_code, body,
+            )
         return None
 
     async def get_pending_shipments(self) -> list[dict]:
@@ -110,7 +163,7 @@ class MeliClient:
         orders = data.get("results", [])
 
         enriched = []
-        all_item_ids = []
+        all_pairs: list[tuple[str, str | None]] = []
 
         async with httpx.AsyncClient() as client:
             for order in orders:
@@ -128,8 +181,11 @@ class MeliClient:
 
                 for oi in order.get("order_items", []):
                     item_id = str(oi.get("item", {}).get("id", ""))
+                    variation_id = str(oi.get("item", {}).get("variation_id", "") or "")
                     if item_id:
-                        all_item_ids.append(item_id)
+                        pair = (item_id, variation_id or None)
+                        if pair not in all_pairs:
+                            all_pairs.append(pair)
 
                 enriched.append({
                     "order": order,
@@ -137,14 +193,15 @@ class MeliClient:
                     "shipment_id": shipping_id,
                 })
 
-        # Fetch thumbnails en batch y adjuntarlos
-        thumbnails = await self.get_items_thumbnails(list(set(all_item_ids)))
+        # Fetch thumbnails en batch por (item_id, variation_id) y adjuntarlos
+        thumbnails = await self.get_items_thumbnails(all_pairs)
         for entry in enriched:
             for oi in entry["order"].get("order_items", []):
                 item_obj = oi.get("item")
                 if isinstance(item_obj, dict):
                     item_id = str(item_obj.get("id", ""))
-                    item_obj["thumbnail"] = thumbnails.get(item_id, "")
+                    variation_id = str(item_obj.get("variation_id", "") or "") or None
+                    item_obj["thumbnail"] = thumbnails.get((item_id, variation_id), "")
 
         return enriched
 

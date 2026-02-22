@@ -103,8 +103,8 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 16px;
     flex-shrink: 0;
+    overflow: hidden;
 }
 
 .brand-name {
@@ -676,6 +676,12 @@ tbody tr:hover td { background: var(--surface-hover); cursor: pointer; }
     line-height: 1.35;
 }
 
+.item-row-album {
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
 .item-row-sku {
     font-size: 11px;
     color: var(--text-muted);
@@ -963,6 +969,13 @@ tbody tr:hover td { background: var(--surface-hover); cursor: pointer; }
     text-overflow: ellipsis;
 }
 
+.modal-item-album {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-style: italic;
+    margin-top: 2px;
+}
+
 .modal-item-sku {
     font-size: 11.5px;
     color: var(--text-muted);
@@ -1095,11 +1108,11 @@ MODAL_JS = """
     const backdrop = document.getElementById('order-modal-backdrop');
     const modalBody = document.getElementById('modal-body');
 
-    function openModal(orderId) {
+    function openModal(shipmentId) {
         backdrop.classList.add('open');
         document.body.style.overflow = 'hidden';
         renderLoading();
-        fetchOrder(orderId);
+        fetchShipment(shipmentId);
     }
 
     function closeModal() {
@@ -1149,7 +1162,7 @@ MODAL_JS = """
         if (o.shipment_id && okSub.includes(o.shipping_substatus_raw)) {
             return `<a href="/ventas/etiqueta/${o.shipment_id}"
                       target="_blank" class="btn btn-primary">
-                      🖨️ Imprimir etiqueta
+                      Imprimir etiqueta
                     </a>`;
         }
         return '';
@@ -1158,7 +1171,7 @@ MODAL_JS = """
     function buildModal(o) {
         const photo = (o.items && o.items.length > 0 && o.items[0].thumbnail)
             ? `<img src="${o.items[0].thumbnail}" class="modal-photo" alt="Foto del producto">`
-            : `<div class="modal-photo-placeholder">📦</div>`;
+            : `<div class="modal-photo-placeholder"></div>`;
 
         const mainTitle = (o.items && o.items.length > 0)
             ? o.items[0].title
@@ -1171,7 +1184,10 @@ MODAL_JS = """
         const itemsHtml = (o.items || []).map(item => {
             const thumb = item.thumbnail
                 ? `<img src="${item.thumbnail}" class="modal-item-thumb" alt="">`
-                : `<div class="modal-item-thumb-empty">📦</div>`;
+                : `<div class="modal-item-thumb-empty"></div>`;
+            const albumHtml = item.album
+                ? `<div class="modal-item-album">${item.album}</div>`
+                : '';
             const skuHtml = item.sku
                 ? `<div class="modal-item-sku">SKU: ${item.sku}</div>`
                 : '';
@@ -1183,6 +1199,7 @@ MODAL_JS = """
                     ${thumb}
                     <div class="modal-item-info">
                         <div class="modal-item-title">${item.title}</div>
+                        ${albumHtml}
                         ${skuHtml}
                     </div>
                     <div class="modal-item-right">
@@ -1253,9 +1270,9 @@ MODAL_JS = """
         </div>`;
     }
 
-    async function fetchOrder(orderId) {
+    async function fetchShipment(shipmentId) {
         try {
-            const resp = await fetch('/ventas/api/orden/' + orderId);
+            const resp = await fetch('/ventas/api/envio/' + shipmentId);
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             const data = await resp.json();
             if (data.error) throw new Error(data.error);
@@ -1288,7 +1305,7 @@ MODAL_JS = """
     });
 
     // Expose globally
-    window.openOrderModal = openModal;
+    window.openShipmentModal = openModal;
     window.closeOrderModal = closeModal;
 })();
 </script>
@@ -1320,13 +1337,19 @@ def base_layout(title: str, content: str, active: str = "") -> str:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{title} — ML Gestión</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛒</text></svg>">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%231a2332'/><rect x='22' y='22' width='56' height='56' rx='10' fill='%23ffe600'/></svg>">
     <style>{GLOBAL_CSS}</style>
 </head>
 <body>
     <nav class="navbar">
         <a href="/" class="brand">
-            <div class="brand-logo">🛒</div>
+            <div class="brand-logo">
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="1" y="6" width="16" height="10" rx="2" fill="%231a2332" stroke="%231a2332"/>
+                    <path d="M5 6V4a4 4 0 0 1 8 0v2" stroke="%231a2332" stroke-width="2" stroke-linecap="round"/>
+                    <circle cx="9" cy="11" r="1.5" fill="%23ffe600"/>
+                </svg>
+            </div>
             <span class="brand-name">ML Gestión</span>
             <span class="brand-tag">Pro</span>
         </a>
