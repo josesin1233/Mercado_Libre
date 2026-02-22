@@ -28,41 +28,47 @@ def _format_date_short(date_str: str | None) -> str:
 # ── Shipment date extractors ──────────────────────────────────────────────────
 
 def _get_deadline(shipment: dict | None) -> str | None:
-    """Busca la fecha límite de despacho probando varias rutas del API de ML."""
+    """
+    Fecha límite para que el vendedor despache el paquete.
+
+    Prioridad:
+    1. estimated_handling_limit (dentro de shipping_option) — deadline del vendedor
+    2. estimated_handling_limit directo en el shipment
+    3. buffering.date (express priority_class 60 — cuando el carrier espera el paquete)
+    4. estimated_delivery_limit — fecha de entrega al comprador (último recurso;
+       es más tardía que el deadline real del vendedor)
+    5. estimated_delivery_final
+    """
     if not shipment:
         return None
     so = shipment.get("shipping_option") or {}
-    # Ruta 1: estimated_delivery_limit
-    d1 = (so.get("estimated_delivery_limit") or {}).get("date")
-    # Ruta 2: buffering.date (pedidos express priority_class 60 — el carrier
-    # espera el paquete en esa fecha, que puede ser anterior al delivery limit)
-    d2 = (so.get("buffering") or {}).get("date")
-    if d1 and d2:
-        try:
-            dt1 = datetime.fromisoformat(d1.replace("Z", "+00:00"))
-            dt2 = datetime.fromisoformat(d2.replace("Z", "+00:00"))
-            return d1 if dt1 <= dt2 else d2
-        except Exception:
-            pass
-    if d1:
-        return d1
-    if d2:
-        return d2
-    # Ruta 3: estimated_handling_limit dentro de shipping_option
+
+    # 1. estimated_handling_limit en shipping_option
     d = (so.get("estimated_handling_limit") or {}).get("date")
     if d:
         return d
-    # Ruta 4: estimated_handling_limit directo en el shipment
+
+    # 2. estimated_handling_limit directo en el shipment
     ehl = shipment.get("estimated_handling_limit")
     if isinstance(ehl, dict):
         d = ehl.get("date")
         if d:
             return d
-    elif isinstance(ehl, str):
+    elif isinstance(ehl, str) and ehl:
         return ehl
-    # Ruta 5: estimated_delivery_final como último recurso
-    d = (so.get("estimated_delivery_final") or {}).get("date")
-    return d
+
+    # 3. buffering.date (express — carrier handoff date)
+    d = (so.get("buffering") or {}).get("date")
+    if d:
+        return d
+
+    # 4. estimated_delivery_limit (fecha de entrega al comprador — fallback)
+    d = (so.get("estimated_delivery_limit") or {}).get("date")
+    if d:
+        return d
+
+    # 5. estimated_delivery_final
+    return (so.get("estimated_delivery_final") or {}).get("date")
 
 
 def _get_delivery_date(shipment: dict | None) -> str | None:
@@ -572,11 +578,13 @@ async def ventas_debug():
                 "estimated_handling_limit": shipment.get("estimated_handling_limit"),
                 "estimated_delivery_time": shipment.get("estimated_delivery_time"),
             }
+        deadline_computed = _get_deadline(shipment)
         results.append({
             "order_id": order.get("id"),
             "order_status": order.get("status"),
             "buyer": order.get("buyer", {}).get("nickname"),
             "items_count": len(order.get("order_items", [])),
+            "deadline_computed": deadline_computed,
             "shipping_status": shipment.get("status") if shipment else None,
             "shipping_substatus": shipment.get("substatus") if shipment else None,
             "logistic_type": shipment.get("logistic_type") if shipment else None,
