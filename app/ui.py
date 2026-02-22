@@ -593,7 +593,7 @@ tbody tr:hover td { background: var(--surface-hover); cursor: pointer; }
 .pedido-body {
     padding: 14px 22px 18px;
     display: grid;
-    grid-template-columns: 1fr auto 116px;
+    grid-template-columns: 1fr auto;
     gap: 24px;
     align-items: start;
 }
@@ -623,35 +623,73 @@ tbody tr:hover td { background: var(--surface-hover); cursor: pointer; }
     font-family: 'SF Mono', 'Fira Code', monospace;
 }
 
-.pedido-thumb-wrap {
+/* ── ITEM ROWS — foto + descripción por producto ── */
+.item-row {
     display: flex;
-    align-items: flex-start;
-    justify-content: center;
-    padding-top: 2px;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--border);
+    min-height: 72px;
 }
 
-.pedido-thumb {
-    width: 104px;
-    height: 104px;
+.item-row:last-child { border-bottom: none; }
+
+.item-row-thumb {
+    width: 60px;
+    height: 60px;
     object-fit: contain;
-    border-radius: 10px;
+    border-radius: 8px;
     border: 1px solid var(--border);
     background: #fff;
+    flex-shrink: 0;
     box-shadow: var(--shadow-sm);
 }
 
-.pedido-thumb-empty {
-    width: 104px;
-    height: 104px;
-    border-radius: 10px;
+.item-row-thumb-empty {
+    width: 60px;
+    height: 60px;
+    border-radius: 8px;
     border: 2px dashed var(--border);
     background: var(--surface-2);
     display: flex;
     align-items: center;
     justify-content: center;
+    font-size: 20px;
+    flex-shrink: 0;
+    opacity: 0.45;
+}
+
+.item-row-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 3px;
+}
+
+.item-row-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    line-height: 1.35;
+}
+
+.item-row-sku {
+    font-size: 11px;
     color: var(--text-muted);
-    font-size: 28px;
-    opacity: 0.5;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.item-row .qty {
+    font-weight: 700;
+    color: var(--accent);
+    font-size: 12.5px;
+    background: var(--accent-soft);
+    padding: 1px 7px;
+    border-radius: 10px;
+    flex-shrink: 0;
 }
 
 .btn-label {
@@ -1022,16 +1060,12 @@ tbody tr:hover td { background: var(--surface-hover); cursor: pointer; }
     .pedido-header { padding: 11px 16px; flex-direction: column; align-items: flex-start; }
     .pedido-body {
         padding: 12px 16px 16px;
-        grid-template-columns: 1fr auto;
-        grid-template-rows: auto auto;
+        grid-template-columns: 1fr;
         gap: 14px;
     }
-    .pedido-thumb-wrap {
-        grid-column: 2;
-        grid-row: 1 / 3;
-    }
-    .pedido-thumb, .pedido-thumb-empty { width: 76px; height: 76px; }
     .pedido-meta { grid-template-columns: 1fr 1fr; gap: 10px; }
+    .item-row { min-height: 64px; }
+    .item-row-thumb, .item-row-thumb-empty { width: 52px; height: 52px; }
     .section-header { padding: 12px 16px; }
 
     .modal-hero { grid-template-columns: 1fr; }
@@ -1113,9 +1147,9 @@ MODAL_JS = """
     function buildLabelBtn(o) {
         const okSub = ['ready_to_print','printed','handling_time_over'];
         if (o.shipment_id && okSub.includes(o.shipping_substatus_raw)) {
-            return `<a href="https://www.mercadolibre.com.mx/envios/${o.shipment_id}/ver_etiqueta"
+            return `<a href="/ventas/etiqueta/${o.shipment_id}"
                       target="_blank" class="btn btn-primary">
-                      Imprimir etiqueta
+                      🖨️ Imprimir etiqueta
                     </a>`;
         }
         return '';

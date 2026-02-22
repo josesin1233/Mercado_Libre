@@ -32,15 +32,27 @@ def _get_deadline(shipment: dict | None) -> str | None:
     if not shipment:
         return None
     so = shipment.get("shipping_option") or {}
-    # Ruta 1: estimated_delivery_limit (última fecha para despachar a tiempo)
-    d = (so.get("estimated_delivery_limit") or {}).get("date")
-    if d:
-        return d
-    # Ruta 2: estimated_handling_limit dentro de shipping_option
+    # Ruta 1: estimated_delivery_limit
+    d1 = (so.get("estimated_delivery_limit") or {}).get("date")
+    # Ruta 2: buffering.date (pedidos express priority_class 60 — el carrier
+    # espera el paquete en esa fecha, que puede ser anterior al delivery limit)
+    d2 = (so.get("buffering") or {}).get("date")
+    if d1 and d2:
+        try:
+            dt1 = datetime.fromisoformat(d1.replace("Z", "+00:00"))
+            dt2 = datetime.fromisoformat(d2.replace("Z", "+00:00"))
+            return d1 if dt1 <= dt2 else d2
+        except Exception:
+            pass
+    if d1:
+        return d1
+    if d2:
+        return d2
+    # Ruta 3: estimated_handling_limit dentro de shipping_option
     d = (so.get("estimated_handling_limit") or {}).get("date")
     if d:
         return d
-    # Ruta 3: estimated_handling_limit directo
+    # Ruta 4: estimated_handling_limit directo en el shipment
     ehl = shipment.get("estimated_handling_limit")
     if isinstance(ehl, dict):
         d = ehl.get("date")
@@ -48,7 +60,7 @@ def _get_deadline(shipment: dict | None) -> str | None:
             return d
     elif isinstance(ehl, str):
         return ehl
-    # Ruta 4: estimated_delivery_final como último recurso
+    # Ruta 5: estimated_delivery_final como último recurso
     d = (so.get("estimated_delivery_final") or {}).get("date")
     return d
 
@@ -224,12 +236,24 @@ def _enrich_order(item: dict) -> dict:
 def _build_product_html(items: list[dict]) -> str:
     html = ""
     for p in items:
-        sku = f' <span class="sku">SKU: {p["sku"]}</span>' if p.get("sku") else ""
-        html += (
-            f'<div class="product-line">'
-            f'{p["title"]} <span class="qty">x{p["qty"]}</span>{sku}'
-            f'</div>'
+        sku_html = (
+            f'<div class="item-row-sku">SKU: {p["sku"]}</div>'
+            if p.get("sku") else ""
         )
+        thumb_html = (
+            f'<img src="{p["thumbnail"]}" class="item-row-thumb" alt="">'
+            if p.get("thumbnail")
+            else '<div class="item-row-thumb-empty">📦</div>'
+        )
+        html += f"""
+        <div class="item-row">
+            {thumb_html}
+            <div class="item-row-info">
+                <div class="item-row-title">{p["title"]}</div>
+                {sku_html}
+            </div>
+            <span class="qty">x{p["qty"]}</span>
+        </div>"""
     return html
 
 
@@ -259,20 +283,14 @@ def _build_order_card_html(o: dict) -> str:
     pulse_class = " pulse" if is_delayed else ""
     deadline_style = "color:var(--danger);font-weight:700;" if is_delayed else ""
 
-    # Thumbnail
-    main_thumb = next((i.get("thumbnail", "") for i in o["items"] if i.get("thumbnail")), "")
-    if main_thumb:
-        thumb_html = f'<img src="{main_thumb}" class="pedido-thumb" alt="Producto">'
-    else:
-        thumb_html = '<div class="pedido-thumb-empty">📦</div>'
-
     # Label button
     label_btn = ""
     ok_sub = ("ready_to_print", "printed", "handling_time_over")
     if o.get("shipment_id") and o.get("shipping_substatus_raw") in ok_sub:
         label_btn = (
-            f'<a href="https://www.mercadolibre.com.mx/envios/{o["shipment_id"]}/ver_etiqueta"'
-            f' target="_blank" class="btn-label" onclick="event.stopPropagation()">Imprimir etiqueta</a>'
+            f'<a href="/ventas/etiqueta/{o["shipment_id"]}"'
+            f' target="_blank" class="btn-label" onclick="event.stopPropagation()">'
+            f'🖨️ Imprimir etiqueta</a>'
         )
 
     order_id = o["order_id"]
@@ -314,9 +332,6 @@ def _build_order_card_html(o: dict) -> str:
                     <span class="meta-label">Total</span>
                     <span class="meta-value"><strong>${o["total"]:,.2f} {o["currency"]}</strong></span>
                 </div>
-            </div>
-            <div class="pedido-thumb-wrap">
-                {thumb_html}
             </div>
         </div>
     </div>"""
