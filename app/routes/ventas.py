@@ -304,7 +304,7 @@ def _build_order_card_html(o: dict) -> str:
     ok_sub = ("ready_to_print", "printed", "handling_time_over")
     if o.get("shipment_id") and o.get("shipping_substatus_raw") in ok_sub:
         label_btn = (
-            f'<a href="https://www.mercadolibre.com.mx/envios/{o["shipment_id"]}/ver_etiqueta"'
+            f'<a href="https://www.mercadolibre.com.mx/ventas/{o["order_id"]}/detalle"'
             f' target="_blank" class="btn-label" onclick="event.stopPropagation()">'
             f'Imprimir etiqueta</a>'
         )
