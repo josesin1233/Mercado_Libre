@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 import logging
 from app.config import settings
@@ -139,40 +140,37 @@ class MeliClient:
 
 
     async def get_pending_shipments(self) -> list[dict]:
-        """Obtiene las 100 órdenes más recientes pagadas."""
+        """Obtiene las 100 órdenes más recientes pagadas. Fetches de shipments en paralelo."""
         data = await self.get_recent_orders(limit=50)
         orders = data.get("results", [])
 
-        enriched = []
         all_pairs: list[tuple[str, str | None]] = []
+        for order in orders:
+            for oi in order.get("order_items", []):
+                item_id = str(oi.get("item", {}).get("id", ""))
+                variation_id = str(oi.get("item", {}).get("variation_id", "") or "")
+                if item_id:
+                    pair = (item_id, variation_id or None)
+                    if pair not in all_pairs:
+                        all_pairs.append(pair)
+
+        async def _fetch_shipment(client: httpx.AsyncClient, order: dict) -> dict:
+            shipping_id = order.get("shipping", {}).get("id")
+            shipment_info = None
+            if shipping_id:
+                try:
+                    r = await self._get(client, f"{self.BASE_URL}/shipments/{shipping_id}")
+                    if r.status_code == 200:
+                        shipment_info = r.json()
+                    else:
+                        logger.warning("Shipment %s devolvió %s", shipping_id, r.status_code)
+                except Exception as exc:
+                    logger.warning("Error al obtener shipment %s: %s", shipping_id, exc)
+            return {"order": order, "shipment": shipment_info, "shipment_id": shipping_id}
 
         async with httpx.AsyncClient() as client:
-            for order in orders:
-                shipping_id = order.get("shipping", {}).get("id")
-                shipment_info = None
-                if shipping_id:
-                    try:
-                        r = await self._get(client, f"{self.BASE_URL}/shipments/{shipping_id}")
-                        if r.status_code == 200:
-                            shipment_info = r.json()
-                        else:
-                            logger.warning("Shipment %s devolvió %s", shipping_id, r.status_code)
-                    except Exception as exc:
-                        logger.warning("Error al obtener shipment %s: %s", shipping_id, exc)
-
-                for oi in order.get("order_items", []):
-                    item_id = str(oi.get("item", {}).get("id", ""))
-                    variation_id = str(oi.get("item", {}).get("variation_id", "") or "")
-                    if item_id:
-                        pair = (item_id, variation_id or None)
-                        if pair not in all_pairs:
-                            all_pairs.append(pair)
-
-                enriched.append({
-                    "order": order,
-                    "shipment": shipment_info,
-                    "shipment_id": shipping_id,
-                })
+            enriched = await asyncio.gather(*[_fetch_shipment(client, o) for o in orders])
+        enriched = list(enriched)
 
         # Fetch thumbnails en batch por (item_id, variation_id) y adjuntarlos
         thumbnails = await self.get_items_thumbnails(all_pairs)

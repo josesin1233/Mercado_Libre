@@ -179,9 +179,11 @@ def _tiempo_restante(deadline_str: str | None) -> tuple[str, str]:
     now = datetime.now(timezone.utc)
     hours = (dt - now).total_seconds() / 3600
     if hours < 0:
+        # Días calendario (igual que ML) en vez de bloques de 24h
+        days_late = (now.date() - dt.date()).days
+        if days_late >= 1:
+            return f"Hace {days_late}d", "badge-danger"
         abs_h = abs(int(hours))
-        if abs_h >= 24:
-            return f"Hace {abs_h // 24}d {abs_h % 24}h", "badge-danger"
         return f"Hace {abs_h}h", "badge-danger"
     elif hours < 24:
         return f"{int(hours)}h restantes", "badge-warning"
@@ -216,6 +218,7 @@ def _enrich_order(item: dict) -> dict:
 
     return {
         "order_id": order.get("id", "?"),
+        "pack_id": order.get("pack_id"),
         "shipment_id": item.get("shipment_id"),
         "buyer": order.get("buyer", {}).get("nickname", "—"),
         "buyer_id": order.get("buyer", {}).get("id"),
@@ -317,20 +320,34 @@ def _build_order_card_html(o: dict) -> str:
 
     order_id = o["order_id"]
     shipment_id = o.get("shipment_id") or order_id
+    # Número de referencia: pack_id si existe (es lo que muestra ML al comprador/vendedor),
+    # si no, shipment_id como referencia de envío, y order_id como secundario.
+    pack_id = o.get("pack_id")
+    if pack_id:
+        ref_label = f'<strong>Pack #{pack_id}</strong> <span class="ref-secondary">· Orden #{order_id}</span>'
+    else:
+        ref_label = f'<strong>#{order_id}</strong>'
+
+    refresh_btn = (
+        f'<button class="btn-refresh" title="Actualizar estado desde ML" '
+        f'onclick="event.stopPropagation();refreshCardStatus({shipment_id!r},this)">↻</button>'
+    )
 
     return f"""
     <div class="pedido-card" style="border-left:4px solid {border_color};"
+         data-shipment="{shipment_id}"
          onclick="openShipmentModal({shipment_id!r})" role="button" tabindex="0"
          onkeydown="if(event.key==='Enter')openShipmentModal({shipment_id!r})">
         <div class="pedido-header" style="background:{header_bg};">
             <div class="pedido-title">
-                <strong>#{order_id}</strong>
+                {ref_label}
                 <span class="buyer">{o["buyer"]}</span>
             </div>
             <div class="pedido-badges">
-                <span class="badge {o["status_cls"]}{pulse_class}">{o["status_label"]}</span>
-                <span class="badge {o["tiempo_cls"]}">{o["tiempo_text"]}</span>
+                <span class="badge badge-status {o["status_cls"]}{pulse_class}">{o["status_label"]}</span>
+                <span class="badge badge-tiempo {o["tiempo_cls"]}">{o["tiempo_text"]}</span>
                 {label_btn}
+                {refresh_btn}
             </div>
         </div>
 
@@ -464,12 +481,49 @@ async def ventas_pendientes():
     n = len(orders)
 
     content = f"""
+        <style>
+        .btn-refresh {{
+            background:transparent; border:1px solid var(--border);
+            border-radius:6px; padding:2px 7px; font-size:14px; cursor:pointer;
+            color:var(--text-muted); line-height:1; transition:all .15s;
+        }}
+        .btn-refresh:hover {{ background:var(--surface-2); color:var(--text); }}
+        .btn-refresh:disabled {{ opacity:.4; cursor:default; }}
+        .ref-secondary {{ font-size:11px; color:var(--text-muted); font-weight:400; }}
+        </style>
+        <script>
+        window.refreshCardStatus = async function(shipmentId, btn) {{
+            btn.disabled = true;
+            btn.textContent = '…';
+            try {{
+                const r = await fetch('/ventas/api/status/' + shipmentId);
+                const d = await r.json();
+                if (d.error) {{ alert('ML error: ' + d.error); return; }}
+                const card = btn.closest('.pedido-card');
+                const sb = card.querySelector('.badge-status');
+                const tb = card.querySelector('.badge-tiempo');
+                if (sb) {{ sb.className = 'badge badge-status ' + d.status_cls + (d.category==='delayed'?' pulse':''); sb.textContent = d.status_label; }}
+                if (tb) {{ tb.className = 'badge badge-tiempo ' + d.tiempo_cls; tb.textContent = d.tiempo_text; }}
+                // Actualizar borde de la card según nueva categoría
+                const borderMap = {{delayed:'var(--danger)',ready:'var(--accent)',shipped:'var(--success)',pending:'var(--warning)'}};
+                if (borderMap[d.category]) card.style.borderLeftColor = borderMap[d.category];
+            }} catch(e) {{
+                alert('Error al conectar con ML');
+            }} finally {{
+                btn.disabled = false;
+                btn.textContent = '↻';
+            }}
+        }};
+        </script>
         <div class="page-header">
             <div>
                 <h1 class="page-title">Ventas Pendientes</h1>
                 <p class="page-subtitle">Pedidos organizados por prioridad de envío — haz clic en un pedido para ver el detalle</p>
             </div>
-            <a href="/ventas/" class="btn" onclick="this.textContent='Cargando…';this.style.pointerEvents='none';">Actualizar</a>
+            <div style="display:flex;gap:8px;">
+                <a href="/ventas/lista" class="btn" style="background:var(--surface-2);color:var(--text);">Lista texto</a>
+                <a href="/ventas/" class="btn" onclick="this.textContent='Cargando…';this.style.pointerEvents='none';">Actualizar</a>
+            </div>
         </div>
 
         <div class="stats">
@@ -646,6 +700,118 @@ async def ventas_envio_api(shipment_id: str):
             base["tiempo_text"] = extra["tiempo_text"]
             base["tiempo_cls"] = extra["tiempo_cls"]
     return JSONResponse(base)
+
+
+@router.get("/api/status/{shipment_id}")
+async def ventas_status_refresh(shipment_id: str):
+    """
+    Consulta el estado actual de un envío directamente a ML — usado por el botón ↻ de cada card.
+    No carga todos los pedidos, solo ese shipment.
+    """
+    if not shipment_id.isdigit():
+        return JSONResponse({"error": "shipment_id inválido"}, status_code=400)
+    try:
+        shipment = await meli.get_shipment(shipment_id)
+        deadline_str = _get_deadline(shipment)
+        status_label, status_cls, category = _classify_status(shipment, deadline_str)
+        tiempo_text, tiempo_cls = _tiempo_restante(deadline_str)
+        return JSONResponse({
+            "shipment_id": shipment_id,
+            "status_label": status_label,
+            "status_cls": status_cls,
+            "category": category,
+            "tiempo_text": tiempo_text,
+            "tiempo_cls": tiempo_cls,
+            "shipping_status_raw": shipment.get("status"),
+            "shipping_substatus_raw": shipment.get("substatus"),
+            "deadline_str": deadline_str,
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/lista", response_class=HTMLResponse)
+async def ventas_lista():
+    """
+    Lista de todos los pedidos en formato texto plano.
+    Agrupada por número de referencia, indica si hay más de un producto.
+    """
+    try:
+        data = await meli.get_pending_shipments()
+    except Exception as e:
+        return HTMLResponse(content=f"<pre>Error: {e}</pre>", status_code=500)
+
+    raw_orders = []
+    for item in data:
+        order = item["order"]
+        if order.get("status") in ("cancelled",):
+            continue
+        shipment = item.get("shipment")
+        if shipment and shipment.get("status") in ("delivered", "cancelled"):
+            continue
+        raw_orders.append(_enrich_order(item))
+
+    # Agrupar por shipment_id
+    CAT_PRIORITY = {"delayed": 0, "ready": 1, "pending": 2, "shipped": 3, "other": 4}
+    seen_shipments: dict = {}
+    orders = []
+    for o in raw_orders:
+        sid = o.get("shipment_id")
+        if sid and sid in seen_shipments:
+            existing = seen_shipments[sid]
+            existing["items"].extend(o["items"])
+            existing["total"] += o["total"]
+            if CAT_PRIORITY.get(o["category"], 99) < CAT_PRIORITY.get(existing["category"], 99):
+                existing["category"] = o["category"]
+                existing["status_label"] = o["status_label"]
+                existing["tiempo_text"] = o["tiempo_text"]
+        else:
+            if sid:
+                seen_shipments[sid] = o
+            orders.append(o)
+
+    orders.sort(key=_sort_key)
+
+    lines = []
+    for o in orders:
+        pack_id = o.get("pack_id")
+        ref = f"Pack #{pack_id}" if pack_id else f"#{o['order_id']}"
+        if o.get("shipment_id") and not pack_id:
+            ref += f"  (envío #{o['shipment_id']})"
+
+        n_items = len(o["items"])
+        multi = f"  [{n_items} productos]" if n_items > 1 else ""
+        lines.append(f"{ref} — {o['buyer']}{multi}")
+        lines.append(f"  Estado: {o['status_label']}  {o['tiempo_text']}")
+        for p in o["items"]:
+            sku_txt = f"  SKU: {p['sku']}" if p.get("sku") else ""
+            album_txt = f"  ({p['album']})" if p.get("album") else ""
+            lines.append(f"    · {p['title']}{album_txt} × {p['qty']}{sku_txt}")
+        lines.append("")
+
+    text_content = "\n".join(lines) if lines else "No hay pedidos pendientes."
+
+    html = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lista de pedidos</title>
+<style>
+  body {{ font-family: monospace; background:#f8fafc; color:#1a2332;
+         padding:2rem; font-size:14px; line-height:1.7; }}
+  pre {{ white-space:pre-wrap; word-break:break-word; max-width:900px; }}
+  a {{ color:#2d72d9; text-decoration:none; font-size:13px; }}
+  a:hover {{ text-decoration:underline; }}
+  h2 {{ font-family:sans-serif; font-size:16px; color:#6b7280; margin-bottom:1rem; }}
+</style>
+</head>
+<body>
+<h2>Lista de pedidos — <a href="/ventas/">← Volver</a> &nbsp;·&nbsp; <a href="/ventas/lista">↻ Actualizar</a></h2>
+<pre>{text_content}</pre>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
 
 
 @router.get("/etiqueta/{shipment_id}")
