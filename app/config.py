@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     # URL de tu otra página que recibe las notificaciones de ML
     EXTERNAL_WEBHOOK_SOURCE: str = ""
 
+    # PostgreSQL — formato: postgresql+asyncpg://user:pass@host:port/db
+    DATABASE_URL: str = ""
+
     class Config:
         env_file = ".env"
 

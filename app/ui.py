@@ -1323,6 +1323,7 @@ def base_layout(title: str, content: str, active: str = "") -> str:
     nav_items = [
         ("Dashboard", "/", "dashboard"),
         ("Ventas", "/ventas/", "ventas"),
+        ("Producción", "/produccion/", "produccion"),
         ("Notificaciones", "/notificaciones/", "notificaciones"),
     ]
 

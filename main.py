@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, HTMLResponse
 from app.routes import orders, webhooks, notifications, ventas
+from app.routes.produccion import router as produccion_router
 from app.routes.dashboard import router as dashboard_router
 from app.routes.notificaciones_page import router as notificaciones_page_router
 from app.auth import router as auth_router
@@ -42,6 +43,7 @@ app.include_router(webhooks.router, prefix="/webhooks", tags=["Webhooks"])
 app.include_router(notifications.router, prefix="/notifications", tags=["Notificaciones"])
 app.include_router(ventas.router, prefix="/ventas", tags=["Ventas"])
 app.include_router(notificaciones_page_router, prefix="/notificaciones", tags=["Notificaciones Page"])
+app.include_router(produccion_router, prefix="/produccion", tags=["Producción"])
 
 
 @app.get("/health")
