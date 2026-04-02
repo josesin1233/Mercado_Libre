@@ -111,15 +111,15 @@ class Notifier:
         title = lines[0].replace("*", "").strip()
         body = lines[1].strip() if len(lines) > 1 else ""
 
-        priority = "urgent" if urgent else "default"
         try:
             await client.post(
-                f"https://ntfy.sh/{settings.NTFY_TOPIC}",
-                content=body,
-                headers={
-                    "Title": title,
-                    "Priority": priority,
-                    "Tags": "shopping_cart" if not urgent else "warning",
+                "https://ntfy.sh",
+                json={
+                    "topic": settings.NTFY_TOPIC,
+                    "title": title,
+                    "message": body,
+                    "priority": 5 if urgent else 3,
+                    "tags": ["warning"] if urgent else ["shopping_cart"],
                 },
             )
         except Exception as e:
