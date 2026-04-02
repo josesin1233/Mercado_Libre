@@ -1,8 +1,25 @@
 from fastapi import APIRouter
 from app.order_manager import order_manager
-from app.models import NotificationMessage, ShippingPriority
+from app.models import NotificationMessage, ShippingPriority, Order, OrderItem
+from app.notifier import notifier
+from datetime import datetime, timezone
 
 router = APIRouter()
+
+
+@router.post("/test")
+async def test_notification():
+    """Manda una notificación de prueba a Telegram y ntfy."""
+    fake_order = Order(
+        order_id=99999,
+        buyer_nickname="CompradorPrueba",
+        items=[OrderItem(item_id="MLA1", title="Producto de prueba", quantity=2, sku="SKU-001")],
+        status="confirmed",
+        date_created=datetime.now(timezone.utc),
+        total_amount=1500.00,
+    )
+    await notifier._send_all("Chino Corps les desea feliz navidad 🎄", urgent=False)
+    return {"status": "enviado", "detail": "Revisa Telegram y ntfy"}
 
 
 @router.get("/pending")
