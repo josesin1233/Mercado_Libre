@@ -33,6 +33,7 @@ class Order(BaseModel):
 
 
 class WebhookPayload(BaseModel):
+    id: int | None = None
     resource: str
     user_id: int
     topic: str

@@ -1,11 +1,27 @@
-from fastapi import APIRouter, Request
+import hashlib
+import hmac as hmac_mod
+from fastapi import APIRouter, Header, HTTPException, Request
 from datetime import datetime, timezone
 from app.models import WebhookPayload, Order, OrderItem, ShippingPriority
 from app.meli_client import meli
 from app.order_manager import order_manager
 from app.notifier import notifier
+from app.config import settings
 
 router = APIRouter()
+
+
+def _verify_ml_signature(x_signature: str, notification_id: str) -> bool:
+    """Valida el header x-signature que manda ML en cada webhook."""
+    try:
+        parts = dict(p.split("=", 1) for p in x_signature.split(",") if "=" in p)
+        ts = parts.get("ts", "")
+        v1 = parts.get("v1", "")
+        msg = f"ts={ts}&v1={notification_id}".encode()
+        expected = hmac_mod.new(settings.CLIENT_SECRET.encode(), msg, hashlib.sha256).hexdigest()
+        return hmac_mod.compare_digest(expected, v1)
+    except Exception:
+        return False
 
 
 def classify_shipping_priority(shipment: dict) -> ShippingPriority:
@@ -34,8 +50,12 @@ def classify_shipping_priority(shipment: dict) -> ShippingPriority:
 
 
 @router.post("/receive")
-async def receive_webhook(payload: WebhookPayload):
+async def receive_webhook(payload: WebhookPayload, x_signature: str | None = Header(None)):
     """Recibe notificaciones de ML (directo o reenviado desde tu otra página)."""
+    if settings.CLIENT_SECRET and x_signature:
+        notification_id = str(payload.id) if payload.id else ""
+        if not _verify_ml_signature(x_signature, notification_id):
+            raise HTTPException(status_code=401, detail="Firma inválida")
 
     if payload.topic == "orders_v2":
         # Extraer order_id del resource: /orders/12345

@@ -40,6 +40,25 @@ async def lifespan(app):
     except Exception as exc:
         print(f"[Startup] No se pudieron cargar tokens desde BD: {exc}")
 
+    # Registrar webhook de Telegram si hay PUBLIC_URL configurada
+    try:
+        from app.config import settings
+        import httpx
+        if settings.TELEGRAM_BOT_TOKEN and settings.PUBLIC_URL:
+            webhook_url = f"{settings.PUBLIC_URL.rstrip('/')}/telegram/updates"
+            async with httpx.AsyncClient() as client:
+                r = await client.post(
+                    f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/setWebhook",
+                    json={"url": webhook_url},
+                )
+            result = r.json()
+            if result.get("ok"):
+                print(f"[Startup] Webhook de Telegram registrado: {webhook_url}")
+            else:
+                print(f"[Startup] Error al registrar webhook de Telegram: {result}")
+    except Exception as exc:
+        print(f"[Startup] No se pudo registrar webhook de Telegram: {exc}")
+
     task = asyncio.create_task(auto_cleanup_loop())
     print("[Startup] Auto-cleanup de órdenes iniciado")
     yield

@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, HTMLResponse
 from app.routes import orders, webhooks, notifications, ventas
+from app.routes.telegram_bot import router as telegram_router
 from app.routes.produccion import router as produccion_router
 from app.routes.dashboard import router as dashboard_router
 from app.routes.notificaciones_page import router as notificaciones_page_router
@@ -11,7 +12,7 @@ from app.config import settings
 app = FastAPI(title="Mercado Libre - Gestión de Ventas", lifespan=lifespan)
 
 
-OPEN_PATHS = {"/", "/health", "/auth/login", "/auth/callback", "/webhooks/receive", "/webhooks/forward"}
+OPEN_PATHS = {"/", "/health", "/auth/login", "/auth/callback", "/webhooks/receive", "/webhooks/forward", "/telegram/updates"}
 
 
 @app.middleware("http")
@@ -44,6 +45,7 @@ app.include_router(notifications.router, prefix="/notifications", tags=["Notific
 app.include_router(ventas.router, prefix="/ventas", tags=["Ventas"])
 app.include_router(notificaciones_page_router, prefix="/notificaciones", tags=["Notificaciones Page"])
 app.include_router(produccion_router, prefix="/produccion", tags=["Producción"])
+app.include_router(telegram_router, prefix="/telegram", tags=["Telegram Bot"])
 
 
 @app.get("/health")

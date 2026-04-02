@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     # IPs permitidas (separadas por coma). Si está vacío, permite todo.
     ALLOWED_IPS: str = ""
 
+    # URL pública del servidor (ej: https://xxx.railway.app) — para registrar webhook de Telegram
+    PUBLIC_URL: str = ""
+
     # URL de tu otra página que recibe las notificaciones de ML
     EXTERNAL_WEBHOOK_SOURCE: str = ""
 
