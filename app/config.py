@@ -15,6 +15,13 @@ class Settings(BaseSettings):
     # URL de tu otra página que recibe las notificaciones de ML
     EXTERNAL_WEBHOOK_SOURCE: str = ""
 
+    # Notificaciones — Telegram
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID: str = ""  # chat_id al que llegan todas las notis (privado, grupo o canal)
+
+    # Notificaciones — ntfy.sh
+    NTFY_TOPIC: str = ""  # ej: "ml-josesolis-ventas" (debe ser único)
+
     # PostgreSQL — formato: postgresql+asyncpg://user:pass@host:port/db
     DATABASE_URL: str = ""
 

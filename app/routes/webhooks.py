@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from app.models import WebhookPayload, Order, OrderItem, ShippingPriority
 from app.meli_client import meli
 from app.order_manager import order_manager
+from app.notifier import notifier
 
 router = APIRouter()
 
@@ -81,11 +82,22 @@ async def receive_webhook(payload: WebhookPayload):
                 total_amount=order_data.get("total_amount", 0),
             )
 
+            # Detectar si es orden nueva o cambio de estado
+            existing = order_manager.orders.get(order.order_id)
+            previous_status = existing.status if existing else None
+            is_new = existing is None
+
             # Si ya está completada, la eliminamos; si no, la agregamos
             if order.is_completed():
                 await order_manager.remove_order(order.order_id)
             else:
                 await order_manager.add_order(order)
+
+            # Notificar según el caso
+            if is_new:
+                await notifier.notify_new_sale(order)
+            elif previous_status != order.status:
+                await notifier.notify_order_status(order, previous_status)
 
             return {"status": "processed", "order_id": order_id, "priority": priority}
 
