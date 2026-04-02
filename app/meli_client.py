@@ -200,6 +200,11 @@ class MeliClient:
             settings.ACCESS_TOKEN = tokens["access_token"]
             settings.REFRESH_TOKEN = tokens["refresh_token"]
             self.token = tokens["access_token"]
+            try:
+                from app.token_store import save_tokens
+                await save_tokens(tokens["access_token"], tokens["refresh_token"])
+            except Exception as exc:
+                logger.warning("No se pudieron persistir tokens en BD: %s", exc)
             return tokens
 
 

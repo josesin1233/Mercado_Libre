@@ -26,6 +26,20 @@ async def lifespan(app):
     except Exception as exc:
         print(f"[Startup] DB no disponible (sin DATABASE_URL o error de conexión): {exc}")
 
+    # Cargar tokens persistidos en BD (sobrescriben env vars si existen)
+    try:
+        from app.token_store import load_tokens
+        from app.config import settings
+        from app.meli_client import meli
+        tokens = await load_tokens()
+        if tokens:
+            settings.ACCESS_TOKEN = tokens["access_token"]
+            settings.REFRESH_TOKEN = tokens["refresh_token"]
+            meli.token = tokens["access_token"]
+            print("[Startup] Tokens cargados desde BD")
+    except Exception as exc:
+        print(f"[Startup] No se pudieron cargar tokens desde BD: {exc}")
+
     task = asyncio.create_task(auto_cleanup_loop())
     print("[Startup] Auto-cleanup de órdenes iniciado")
     yield

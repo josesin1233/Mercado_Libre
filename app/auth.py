@@ -77,6 +77,16 @@ async def callback(code: str, state: str = ""):
             settings.REFRESH_TOKEN = response_data["refresh_token"]
         meli.token = response_data["access_token"]
 
+        # Persistir en BD para sobrevivir reinicios
+        try:
+            from app.token_store import save_tokens
+            await save_tokens(
+                response_data["access_token"],
+                response_data.get("refresh_token", settings.REFRESH_TOKEN),
+            )
+        except Exception:
+            pass
+
         return {
             "status": "authenticated",
             "message": "Tokens obtenidos. Guárdalos en tus variables de entorno.",

@@ -12,6 +12,17 @@ class Base(DeclarativeBase):
     pass
 
 
+class MeliTokens(Base):
+    __tablename__ = "meli_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)  # siempre 1
+    access_token: Mapped[str] = mapped_column(Text, nullable=False)
+    refresh_token: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class Artista(Base):
     __tablename__ = "artistas"
 
