@@ -29,7 +29,7 @@ class Order(BaseModel):
     total_amount: float
 
     def is_completed(self) -> bool:
-        return self.status in ("delivered", "cancelled")
+        return self.status in ("delivered", "cancelled", "invalid")
 
 
 class WebhookPayload(BaseModel):

@@ -113,11 +113,13 @@ async def receive_webhook(payload: WebhookPayload, x_signature: str | None = Hea
             else:
                 await order_manager.add_order(order)
 
-            # Notificar según el caso
-            if is_new:
-                await notifier.notify_new_sale(order)
-            elif previous_status != order.status:
-                await notifier.notify_order_status(order, previous_status)
+            # Solo notificar cuando el estado es relevante para el vendedor
+            _NOTIFY = {"paid", "cancelled", "invalid"}
+            if order.status in _NOTIFY:
+                if is_new:
+                    await notifier.notify_new_sale(order)
+                elif previous_status != order.status:
+                    await notifier.notify_order_status(order, previous_status)
 
             return {"status": "processed", "order_id": order_id, "priority": priority}
 
