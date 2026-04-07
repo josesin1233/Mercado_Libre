@@ -89,22 +89,28 @@ async def _cmd_pedidos(chat_id: int) -> None:
     word = "pedido" if total == 1 else "pedidos"
     lines = [f"📦 *{total} {word} en total:*\n"]
 
+    LIMIT = 10
+
     if paid:
         lines.append("*🟢 Por preparar:*")
-        for o in paid:
+        for o in paid[:LIMIT]:
             emoji = PRIORITY_EMOJI.get(o.shipping_priority.value, "📋")
             items = _esc(", ".join(f"{i.title} ×{i.quantity}" for i in o.items))
             deadline = f" — ⏰ {_esc(o.shipping_deadline.strftime('%d/%m %H:%M'))}" if o.shipping_deadline else ""
             lines.append(f"{emoji} *\\#{o.order_id}*{deadline}\n  {items}")
+        if len(paid) > LIMIT:
+            lines.append(f"_\\.\\.\\. y {len(paid) - LIMIT} más — usa /estado para ver una específica_")
 
     if waiting:
         if paid:
             lines.append("")
         lines.append("*⏳ Esperando pago:*")
-        for o in waiting:
+        for o in waiting[:LIMIT]:
             status = _esc(STATUS_LABELS.get(o.status, o.status))
             items = _esc(", ".join(f"{i.title} ×{i.quantity}" for i in o.items))
             lines.append(f"🟡 *\\#{o.order_id}* — {status}\n  {items}")
+        if len(waiting) > LIMIT:
+            lines.append(f"_\\.\\.\\. y {len(waiting) - LIMIT} más_")
 
     await _reply(chat_id, "\n".join(lines))
 
