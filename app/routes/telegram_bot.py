@@ -51,7 +51,13 @@ async def _reply(chat_id: int, text: str, reply_markup: dict | None = None) -> N
     if reply_markup:
         payload["reply_markup"] = reply_markup
     async with httpx.AsyncClient(timeout=10) as client:
-        await client.post(url, json=payload)
+        r = await client.post(url, json=payload)
+        if not r.json().get("ok"):
+            # Fallback: enviar sin formato si falla el MarkdownV2
+            plain = re.sub(r'\\(.)', r'\1', re.sub(r'[*_`~]', '', text))
+            payload["text"] = plain
+            del payload["parse_mode"]
+            await client.post(url, json=payload)
 
 
 async def _answer_callback(callback_query_id: str) -> None:
@@ -86,22 +92,24 @@ def _pending_orders() -> list[Order]:
 
 
 async def _send_order_card(chat_id: int, order: Order) -> None:
-    """Manda un mensaje por orden con botones de acción."""
+    """Manda un mensaje completo por orden (todos sus artículos juntos)."""
     emoji = PRIORITY_EMOJI.get(order.shipping_priority.value, "📋")
     priority = _esc(PRIORITY_LABELS.get(order.shipping_priority.value, ""))
     items = "\n".join(
-        f"  • {_esc(i.title)} ×{i.quantity}" + (f" `{_esc(i.sku)}`" if i.sku else "")
+        f"  • {_esc(i.title)} ×{i.quantity}" + (f" \`{_esc(i.sku)}\`" if i.sku else "")
         for i in order.items
     )
-    deadline = f"\n⏰ {_esc(order.shipping_deadline.strftime('%d/%m %H:%M'))}" if order.shipping_deadline else ""
+    deadline = (
+        f"\n📅 Enviar antes del: *{_esc(order.shipping_deadline.strftime('%d/%m/%Y %H:%M'))}*"
+        if order.shipping_deadline else ""
+    )
 
     msg = (
-        f"{emoji} *\\#{order.order_id}*\n"
+        f"{emoji} *Pedido \\#{order.order_id}* — {priority}\n"
         f"👤 {_esc(order.buyer_nickname)}\n"
-        f"💰 ${_esc(f'{order.total_amount:,.2f}')}\n"
-        f"📦 {priority}"
+        f"💰 ${_esc(f'{order.total_amount:,.2f}')}"
         f"{deadline}\n"
-        f"\n{items}"
+        f"\n*Artículos:*\n{items}"
     )
     markup = {
         "inline_keyboard": [[
