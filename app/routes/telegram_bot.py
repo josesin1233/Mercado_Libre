@@ -73,11 +73,15 @@ def _is_authorized(chat_id: int) -> bool:
 # ------------------------------------------------------------------ #
 
 def _pending_orders() -> list[Order]:
-    """Órdenes pagadas que aún no han sido enviadas."""
-    return [
-        o for o in order_manager.get_sorted_orders()
-        if o.status == "paid" and o.shipping_priority != ShippingPriority.FULFILLED
-    ]
+    """Órdenes pagadas que aún no han sido enviadas, sin duplicados por order_id."""
+    seen: set[int] = set()
+    result = []
+    for o in order_manager.get_sorted_orders():
+        if o.status == "paid" and o.shipping_priority != ShippingPriority.FULFILLED:
+            if o.order_id not in seen:
+                seen.add(o.order_id)
+                result.append(o)
+    return result
 
 
 def _order_card_text(order: Order) -> str:
@@ -85,7 +89,8 @@ def _order_card_text(order: Order) -> str:
     priority = PRIORITY_LABELS.get(order.shipping_priority.value, "")
     deadline = (
         f"\nEnviar antes del: <b>{_esc(order.shipping_deadline.strftime('%d/%m/%Y %H:%M'))}</b>"
-        if order.shipping_deadline else ""
+        if order.shipping_deadline
+        else "\nFecha de envio: <i>sin asignar</i>"
     )
 
     item_lines = []

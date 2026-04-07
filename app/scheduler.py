@@ -8,7 +8,7 @@ async def load_orders_from_ml() -> int:
     """Carga órdenes recientes pagadas desde ML al arrancar, para no perder estado tras un reinicio."""
     from app.meli_client import meli
     from app.models import Order, OrderItem, ShippingPriority
-    from app.routes.webhooks import classify_shipping_priority
+    from app.routes.webhooks import classify_shipping_priority, extract_shipping_deadline
 
     try:
         enriched = await meli.get_pending_shipments()
@@ -24,9 +24,7 @@ async def load_orders_from_ml() -> int:
             deadline = None
             if shipment:
                 priority = classify_shipping_priority(shipment)
-                dl = shipment.get("shipping_option", {}).get("estimated_handling_limit", {}).get("date")
-                if dl:
-                    deadline = datetime.fromisoformat(dl.replace("Z", "+00:00"))
+                deadline = extract_shipping_deadline(shipment)
 
             # Saltar órdenes ya enviadas o entregadas
             if priority == ShippingPriority.FULFILLED:

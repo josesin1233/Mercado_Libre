@@ -24,6 +24,35 @@ def _verify_ml_signature(x_signature: str, notification_id: str) -> bool:
         return False
 
 
+def extract_shipping_deadline(shipment: dict) -> datetime | None:
+    """Extrae la fecha límite de envío del shipment probando múltiples rutas."""
+    # Ruta 1: shipping_option.estimated_handling_limit.date (más común)
+    handling = shipment.get("shipping_option", {}).get("estimated_handling_limit")
+    if isinstance(handling, dict):
+        dl = handling.get("date")
+    elif isinstance(handling, str) and handling:
+        dl = handling
+    else:
+        dl = None
+
+    # Ruta 2: shipping_option.estimated_delivery_time.date
+    if not dl:
+        delivery = shipment.get("shipping_option", {}).get("estimated_delivery_time", {})
+        if isinstance(delivery, dict):
+            dl = delivery.get("date")
+
+    # Ruta 3: dates.time_to_ship
+    if not dl:
+        dl = shipment.get("dates", {}).get("time_to_ship")
+
+    if dl:
+        try:
+            return datetime.fromisoformat(str(dl).replace("Z", "+00:00"))
+        except Exception:
+            pass
+    return None
+
+
 def classify_shipping_priority(shipment: dict) -> ShippingPriority:
     """Clasifica la prioridad según el tipo de envío y fecha límite."""
     status = shipment.get("status", "")
@@ -74,11 +103,7 @@ async def receive_webhook(payload: WebhookPayload, x_signature: str | None = Hea
             if shipping_id:
                 shipment = await meli.get_shipment(str(shipping_id))
                 priority = classify_shipping_priority(shipment)
-                dl = shipment.get("shipping_option", {}).get(
-                    "estimated_handling_limit", {}
-                ).get("date")
-                if dl:
-                    deadline = datetime.fromisoformat(dl.replace("Z", "+00:00"))
+                deadline = extract_shipping_deadline(shipment)
 
             items = [
                 OrderItem(
