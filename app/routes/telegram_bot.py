@@ -4,6 +4,7 @@ import re
 import httpx
 from fastapi import APIRouter, Request
 from app.config import settings
+from app.models import Order, ShippingPriority
 from app.order_manager import order_manager
 
 router = APIRouter()
@@ -73,69 +74,84 @@ def _is_authorized(chat_id: int) -> bool:
 
 
 # ------------------------------------------------------------------ #
+#  Helper: tarjeta de una orden                                       #
+# ------------------------------------------------------------------ #
+
+def _pending_orders() -> list[Order]:
+    """Órdenes pagadas que aún no han sido enviadas."""
+    return [
+        o for o in order_manager.get_sorted_orders()
+        if o.status == "paid" and o.shipping_priority != ShippingPriority.FULFILLED
+    ]
+
+
+async def _send_order_card(chat_id: int, order: Order) -> None:
+    """Manda un mensaje por orden con botones de acción."""
+    emoji = PRIORITY_EMOJI.get(order.shipping_priority.value, "📋")
+    priority = _esc(PRIORITY_LABELS.get(order.shipping_priority.value, ""))
+    items = "\n".join(
+        f"  • {_esc(i.title)} ×{i.quantity}" + (f" `{_esc(i.sku)}`" if i.sku else "")
+        for i in order.items
+    )
+    deadline = f"\n⏰ {_esc(order.shipping_deadline.strftime('%d/%m %H:%M'))}" if order.shipping_deadline else ""
+
+    msg = (
+        f"{emoji} *\\#{order.order_id}*\n"
+        f"👤 {_esc(order.buyer_nickname)}\n"
+        f"💰 ${_esc(f'{order.total_amount:,.2f}')}\n"
+        f"📦 {priority}"
+        f"{deadline}\n"
+        f"\n{items}"
+    )
+    markup = {
+        "inline_keyboard": [[
+            {"text": "🔗 Ver en ML", "url": f"https://www.mercadolibre.com.mx/ventas/{order.order_id}/detalle"},
+            {"text": "📋 Estado", "callback_data": f"estado:{order.order_id}"},
+        ]]
+    }
+    await _reply(chat_id, msg, reply_markup=markup)
+
+
+# ------------------------------------------------------------------ #
 #  Handlers de comandos                                               #
 # ------------------------------------------------------------------ #
 
+LIMIT = 15
+
+
 async def _cmd_pedidos(chat_id: int) -> None:
-    orders = order_manager.get_sorted_orders()
+    orders = _pending_orders()
     if not orders:
         await _reply(chat_id, "✅ No hay pedidos pendientes\\.")
         return
 
-    paid = [o for o in orders if o.status == "paid"]
-    waiting = [o for o in orders if o.status != "paid"]
-
     total = len(orders)
     word = "pedido" if total == 1 else "pedidos"
-    lines = [f"📦 *{total} {word} en total:*\n"]
+    await _reply(chat_id, f"📦 *{total} {word} pendientes:*")
 
-    LIMIT = 10
+    for o in orders[:LIMIT]:
+        await _send_order_card(chat_id, o)
 
-    if paid:
-        lines.append("*🟢 Por preparar:*")
-        for o in paid[:LIMIT]:
-            emoji = PRIORITY_EMOJI.get(o.shipping_priority.value, "📋")
-            items = _esc(", ".join(f"{i.title} ×{i.quantity}" for i in o.items))
-            deadline = f" — ⏰ {_esc(o.shipping_deadline.strftime('%d/%m %H:%M'))}" if o.shipping_deadline else ""
-            lines.append(f"{emoji} *\\#{o.order_id}*{deadline}\n  {items}")
-        if len(paid) > LIMIT:
-            lines.append(f"_\\.\\.\\. y {len(paid) - LIMIT} más — usa /estado para ver una específica_")
-
-    if waiting:
-        if paid:
-            lines.append("")
-        lines.append("*⏳ Esperando pago:*")
-        for o in waiting[:LIMIT]:
-            status = _esc(STATUS_LABELS.get(o.status, o.status))
-            items = _esc(", ".join(f"{i.title} ×{i.quantity}" for i in o.items))
-            lines.append(f"🟡 *\\#{o.order_id}* — {status}\n  {items}")
-        if len(waiting) > LIMIT:
-            lines.append(f"_\\.\\.\\. y {len(waiting) - LIMIT} más_")
-
-    await _reply(chat_id, "\n".join(lines))
+    if total > LIMIT:
+        await _reply(chat_id, f"_\\.\\.\\. y {total - LIMIT} más — usa /estado `<id>` para ver uno específico_")
 
 
 async def _cmd_urgentes(chat_id: int) -> None:
-    orders = order_manager.get_urgent_orders()
+    orders = [o for o in order_manager.get_urgent_orders() if o.status == "paid"]
     if not orders:
         await _reply(chat_id, "✅ No hay pedidos urgentes\\.")
         return
 
     total = len(orders)
     word = "pedido urgente" if total == 1 else "pedidos urgentes"
-    lines = [f"⚠️ *{total} {word}:*\n"]
-    for o in orders:
-        items = _esc(", ".join(f"{i.title} ×{i.quantity}" for i in o.items))
-        deadline = f"⏰ {_esc(o.shipping_deadline.strftime('%d/%m %H:%M'))}" if o.shipping_deadline else ""
-        lines.append(f"*\\#{o.order_id}*{' — ' + deadline if deadline else ''}\n  {items}")
+    await _reply(chat_id, f"⚠️ *{total} {word}:*")
 
-    await _reply(chat_id, "\n".join(lines))
+    for o in orders[:LIMIT]:
+        await _send_order_card(chat_id, o)
 
 
 async def _cmd_empacar(chat_id: int) -> None:
-    all_orders = order_manager.get_sorted_orders()
-    orders = [o for o in all_orders if o.status == "paid"]
-
+    orders = _pending_orders()
     if not orders:
         await _reply(chat_id, "✅ Nada que empacar por ahora\\.")
         return

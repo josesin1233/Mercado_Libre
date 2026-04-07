@@ -28,6 +28,10 @@ async def load_orders_from_ml() -> int:
                 if dl:
                     deadline = datetime.fromisoformat(dl.replace("Z", "+00:00"))
 
+            # Saltar órdenes ya enviadas o entregadas
+            if priority == ShippingPriority.FULFILLED:
+                continue
+
             items = [
                 OrderItem(
                     item_id=item["item"]["id"],
