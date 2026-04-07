@@ -95,10 +95,16 @@ async def _send_order_card(chat_id: int, order: Order) -> None:
     """Manda un mensaje completo por orden (todos sus artículos juntos)."""
     emoji = PRIORITY_EMOJI.get(order.shipping_priority.value, "📋")
     priority = _esc(PRIORITY_LABELS.get(order.shipping_priority.value, ""))
-    items = "\n".join(
-        f"  • {_esc(i.title)} ×{i.quantity}" + (f" \`{_esc(i.sku)}\`" if i.sku else "")
-        for i in order.items
-    )
+    item_lines = []
+    for i in order.items:
+        line = f"  • {_esc(i.title)}"
+        if i.variation:
+            line += f" — {_esc(i.variation)}"
+        line += f" ×{i.quantity}"
+        if i.sku:
+            line += f" \`{_esc(i.sku)}\`"
+        item_lines.append(line)
+    items = "\n".join(item_lines)
     deadline = (
         f"\n📅 Enviar antes del: *{_esc(order.shipping_deadline.strftime('%d/%m/%Y %H:%M'))}*"
         if order.shipping_deadline else ""

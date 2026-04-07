@@ -90,11 +90,16 @@ class Notifier:
     # ------------------------------------------------------------------ #
 
     def _items_text(self, order: Order) -> str:
-        return "\n".join(
-            f"  • {_esc(item.title)} ×{item.quantity}"
-            + (f" \\(SKU: `{_esc(item.sku)}`\\)" if item.sku else "")
-            for item in order.items
-        )
+        lines = []
+        for item in order.items:
+            line = f"  • {_esc(item.title)}"
+            if item.variation:
+                line += f" — {_esc(item.variation)}"
+            line += f" ×{item.quantity}"
+            if item.sku:
+                line += f" \\(SKU: `{_esc(item.sku)}`\\)"
+            lines.append(line)
+        return "\n".join(lines)
 
     def _build_paid_message(self, order: Order, previous_status: str | None) -> str:
         priority_label = self.PRIORITY_LABELS.get(order.shipping_priority.value, "")

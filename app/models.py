@@ -15,6 +15,7 @@ class OrderItem(BaseModel):
     title: str
     quantity: int
     sku: str | None = None
+    variation: str | None = None  # e.g. "Map of the Soul: 7"
 
 
 class Order(BaseModel):

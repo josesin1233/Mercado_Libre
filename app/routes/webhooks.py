@@ -86,6 +86,11 @@ async def receive_webhook(payload: WebhookPayload, x_signature: str | None = Hea
                     title=item["item"]["title"],
                     quantity=item["quantity"],
                     sku=item["item"].get("seller_sku"),
+                    variation=", ".join(
+                        a["value_name"]
+                        for a in item["item"].get("variation_attributes", [])
+                        if a.get("value_name")
+                    ) or None,
                 )
                 for item in order_data.get("order_items", [])
             ]
