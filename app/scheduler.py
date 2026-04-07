@@ -26,6 +26,17 @@ async def load_orders_from_ml() -> int:
                 priority = classify_shipping_priority(shipment)
                 deadline = extract_shipping_deadline(shipment)
 
+            # Log de diagnóstico para ver estructura del shipment (temporal)
+            if count == 0 and shipment:
+                import json as _json
+                so = shipment.get("shipping_option", {})
+                print("[DEBUG shipment] logistic_type:", shipment.get("logistic_type"))
+                print("[DEBUG shipment] status:", shipment.get("status"))
+                print("[DEBUG shipment] handling_time:", shipment.get("handling_time"))
+                print("[DEBUG shipment] estimated_handling_limit:", _json.dumps(so.get("estimated_handling_limit"), default=str))
+                print("[DEBUG shipment] estimated_delivery_time:", _json.dumps(so.get("estimated_delivery_time"), default=str))
+                print("[DEBUG shipment] dates:", _json.dumps(shipment.get("dates"), default=str))
+
             # Saltar órdenes ya enviadas o entregadas
             if priority == ShippingPriority.FULFILLED:
                 continue
@@ -106,6 +117,7 @@ async def lifespan(app):
     try:
         count = await load_orders_from_ml()
         print(f"[Startup] {count} órdenes cargadas desde ML")
+
     except Exception as exc:
         print(f"[Startup] No se pudieron cargar órdenes: {exc}")
 
